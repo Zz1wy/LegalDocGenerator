@@ -222,10 +222,66 @@
                   🔄 刷新记录
                 </el-button>
               </template>
+
+              <!-- 搜索筛选区域 -->
+              <div style="margin-bottom: 20px; padding: 15px; background: #f8fafc; border-radius: 8px;">
+                <el-row :gutter="15">
+                  <el-col :span="8">
+                    <el-input
+                      v-model="searchKeyword"
+                      placeholder="🔍 搜索文书类型或内容..."
+                      clearable
+                      @input="filterRecords"
+                    >
+                    </el-input>
+                  </el-col>
+                  <el-col :span="6">
+                    <el-date-picker
+                      v-model="dateRange"
+                      type="daterange"
+                      range-separator="至"
+                      start-placeholder="开始日期"
+                      end-placeholder="结束日期"
+                      value-format="YYYY-MM-DD"
+                      @change="filterRecords"
+                      style="width: 100%;"
+                    />
+                  </el-col>
+                  <el-col :span="4">
+                    <el-select v-model="filterDocType" placeholder="全部类型" clearable @change="filterRecords">
+                      <el-option 
+                        v-for="doc in docTypes" 
+                        :key="doc.id" 
+                        :label="doc.name" 
+                        :value="doc.name" 
+                      />
+                    </el-select>
+                  </el-col>
+                  <el-col :span="6">
+                    <div style="line-height: 32px; color: #64748b; font-size: 14px;">
+                      共 <span style="color: #2563eb; font-weight: bold;">{{ filteredRecords.length }}</span> 条记录
+                    </div>
+                  </el-col>
+                </el-row>
+              </div>
+
+              <!-- 统计卡片 -->
+              <div style="margin-bottom: 20px;">
+                <el-row :gutter="10">
+                  <el-col :span="4" v-for="(count, type) in docTypeStats" :key="type">
+                    <div style="text-align: center; padding: 10px; background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%); border-radius: 8px;">
+                      <div style="font-size: 24px; font-weight: bold; color: #1d4ed8;">{{ count }}</div>
+                      <div style="font-size: 12px; color: #64748b;">{{ type }}</div>
+                    </div>
+                  </el-col>
+                </el-row>
+              </div>
+
+              <!-- 记录列表 -->
               <transition name="fade">
                 <el-table 
-                  v-if="historyRecords.length > 0"
-                  :data="historyRecords" 
+                  v-if="filteredRecords.length > 0"
+                  :data="paginatedRecords" 
                   border 
                   style="width: 100%;"
                 >
@@ -249,9 +305,20 @@
                   </el-table-column>
                 </el-table>
                 <div v-else style="text-align: center; padding: 60px;">
-                  <el-empty description="暂无历史记录" />
+                  <el-empty :description="searchKeyword || filterDocType || dateRange.length > 0 ? '没有找到符合条件的记录' : '暂无历史记录'" />
                 </div>
               </transition>
+
+              <!-- 分页 -->
+              <div style="margin-top: 20px; text-align: center;" v-if="filteredRecords.length > pageSize">
+                <el-pagination
+                  v-model:current-page="currentPage"
+                  :page-size="pageSize"
+                  :total="filteredRecords.length"
+                  layout="prev, pager, next"
+                  background
+                />
+              </div>
             </el-card>
           </el-tab-pane>
         </el-tabs>
@@ -277,7 +344,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import axios from 'axios'
 
 const isLoading = ref(false)
@@ -306,6 +373,60 @@ const formData = ref({
 })
 
 const historyRecords = ref([])
+
+// 搜索和筛选
+const searchKeyword = ref('')
+const dateRange = ref([])
+const filterDocType = ref('')
+const currentPage = ref(1)
+const pageSize = ref(10)
+
+// 筛选后的记录
+const filteredRecords = computed(() => {
+  let result = historyRecords.value
+  
+  if (searchKeyword.value) {
+    const keyword = searchKeyword.value.toLowerCase()
+    result = result.filter(record => 
+      record.doc_type.toLowerCase().includes(keyword) ||
+      formatFields(record.input_fields).toLowerCase().includes(keyword)
+    )
+  }
+  
+  if (dateRange.value && dateRange.value.length === 2) {
+    const [startDate, endDate] = dateRange.value
+    result = result.filter(record => {
+      const recordDate = record.created_at.split(' ')[0]
+      return recordDate >= startDate && recordDate <= endDate
+    })
+  }
+  
+  if (filterDocType.value) {
+    result = result.filter(record => record.doc_type === filterDocType.value)
+  }
+  
+  return result
+})
+
+// 分页后的记录
+const paginatedRecords = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  const end = start + pageSize.value
+  return filteredRecords.value.slice(start, end)
+})
+
+// 统计各类文书数量
+const docTypeStats = computed(() => {
+  const stats = {}
+  historyRecords.value.forEach(record => {
+    stats[record.doc_type] = (stats[record.doc_type] || 0) + 1
+  })
+  return stats
+})
+
+function filterRecords() {
+  currentPage.value = 1
+}
 
 onMounted(async () => {
   await loadDocTypes()
