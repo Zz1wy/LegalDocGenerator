@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 import os
 import json
+import httpx
 from dotenv import load_dotenv
 from database import get_all_templates, save_generated_record
 
@@ -28,91 +29,79 @@ class GenerateResponse(BaseModel):
     content: str
     message: Optional[str] = None
 
-def generate_document_content(doc_type: str, fields: dict) -> str:
+# Ollama 配置
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+
+async def call_ollama(prompt: str) -> str:
+    """调用 Ollama 大语言模型"""
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(
+                f"{OLLAMA_HOST}/api/generate",
+                json={
+                    "model": "qwen2.5:7b",
+                    "prompt": prompt,
+                    "stream": False
+                }
+            )
+            if response.status_code == 200:
+                return response.json().get("response", "")
+            else:
+                raise Exception(f"Ollama 返回错误: {response.status_code}")
+    except Exception as e:
+        raise Exception(f"调用大模型失败: {str(e)}")
+
+def build_prompt(doc_type: str, fields: dict) -> str:
+    """构建提示词"""
+    field_str = ", ".join([f"{k}={v}" for k, v in fields.items() if v])
+    
     templates = {
-        "劳动合同": f"""
-┌─────────────────────────────────────────────┐
-              劳动合同书
-├─────────────────────────────────────────────┤
-甲方（用人单位）：{fields.get('party_a', '')}
-乙方（劳动者）：{fields.get('party_b', '')}
+        "劳动合同": f"""请生成一份规范的劳动合同书，包含以下信息：{field_str}
+要求：
+1. 格式规范，使用法律文书标准格式
+2. 包含甲方乙方信息、合同期限、工作内容、工资待遇等必要条款
+3. 包含双方权利义务、合同变更解除等条款
+4. 包含签名日期栏
+请直接输出文书内容，不要解释。""",
 
-根据《中华人民共和国劳动法》及相关法律法规，甲乙双方经平等协商一致，签订本合同。
+        "民事起诉状": f"""请生成一份规范的民事起诉状，包含以下信息：{field_str}
+要求：
+1. 格式规范，包含原告被告信息
+2. 清晰列出诉讼请求
+3. 详细陈述事实与理由
+4. 包含证据和证据来源部分
+5. 包含签名日期栏
+请直接输出文书内容，不要解释。""",
 
-一、合同期限
-{fields.get('term', '')}
+        "借条": f"""请生成一份规范的借条，包含以下信息：{field_str}
+要求：
+1. 格式规范，包含出借人借款人信息
+2. 明确借款金额（大写）
+3. 包含借款日期和还款日期
+4. 包含借款人签名按手印栏
+请直接输出文书内容，不要解释。""",
 
-二、工资待遇
-每月工资：{fields.get('salary', '')}元
-
-三、双方权利义务
-1. 甲方应按时支付劳动报酬
-2. 乙方应遵守公司规章制度
-
-甲方签字：__________    乙方签字：__________
-日期：__________        日期：__________
-└─────────────────────────────────────────────┘
-        """,
-        
-        "民事起诉状": f"""
-┌─────────────────────────────────────────────┐
-              民事起诉状
-├─────────────────────────────────────────────┤
-原告：{fields.get('plaintiff', '')}
-被告：{fields.get('defendant', '')}
-
-诉讼请求：
-{fields.get('claim', '')}
-
-事实与理由：
-{fields.get('reason', '')}
-
-此致
-XX人民法院
-
-起诉人（签名）：__________
-日期：__________
-└─────────────────────────────────────────────┘
-        """,
-        
-        "借条": f"""
-┌─────────────────────────────────────────────┐
-                    借条
-├─────────────────────────────────────────────┤
-今本人（借款人）{fields.get('borrower', '')}向（出借人）{fields.get('lender', '')}
-借到人民币{fields.get('amount', '')}元（大写：__________）。
-
-还款日期：{fields.get('repay_date', '')}
-
-借款人签字（按手印）：__________
-日期：__________
-└─────────────────────────────────────────────┘
-        """,
-        
-        "租赁合同": f"""
-┌─────────────────────────────────────────────┐
-              租赁合同
-├─────────────────────────────────────────────┤
-出租方（甲方）：{fields.get('landlord', '')}
-承租方（乙方）：{fields.get('tenant', '')}
-
-租赁物：{fields.get('property', '')}
-租期：{fields.get('term', '')}
-租金：{fields.get('rent', '')}元/月
-
-甲方签字：__________    乙方签字：__________
-日期：__________        日期：__________
-└─────────────────────────────────────────────┘
-        """
+        "租赁合同": f"""请生成一份规范的租赁合同，包含以下信息：{field_str}
+要求：
+1. 格式规范，包含出租方承租方信息
+2. 明确租赁物、租期、租金
+3. 包含双方权利义务条款
+4. 包含违约金条款
+5. 包含签名日期栏
+请直接输出文书内容，不要解释。"""
     }
-    return templates.get(doc_type, f"暂不支持生成{doc_type}")
+    
+    return templates.get(doc_type, f"请生成一份{doc_type}，包含以下信息：{field_str}")
+
+async def generate_with_ai(doc_type: str, fields: dict) -> str:
+    """使用大语言模型生成文书"""
+    prompt = build_prompt(doc_type, fields)
+    return await call_ollama(prompt)
 
 @app.get("/api/doc-types")
 async def get_doc_types():
-    """获取文书类型列表（从数据库读取）"""
     templates = get_all_templates()
     if not templates:
-        # 如果数据库没有，返回默认列表
         return [
             {"id": 1, "name": "劳动合同", "category": "劳动"},
             {"id": 2, "name": "民事起诉状", "category": "诉讼"},
@@ -123,9 +112,16 @@ async def get_doc_types():
 
 @app.post("/api/generate")
 async def generate_document(request: GenerateRequest):
-    """生成文书"""
+    """生成文书（使用大语言模型）"""
     try:
-        content = generate_document_content(request.doc_type, request.fields)
+        # 检查字段是否有值
+        has_values = any(v for v in request.fields.values() if v)
+        
+        if not has_values:
+            return {"success": False, "content": "", "message": "请填写至少一个字段"}
+        
+        # 调用大语言模型生成
+        content = await generate_with_ai(request.doc_type, request.fields)
         
         # 保存到数据库
         save_generated_record(request.doc_type, request.fields, content)
@@ -133,6 +129,18 @@ async def generate_document(request: GenerateRequest):
         return {"success": True, "content": content}
     except Exception as e:
         return {"success": False, "content": "", "message": str(e)}
+
+@app.get("/api/models")
+async def get_available_models():
+    """获取可用的模型列表"""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"{OLLAMA_HOST}/api/tags")
+            if response.status_code == 200:
+                return {"success": True, "models": response.json().get("models", [])}
+            return {"success": False, "models": [], "message": "无法获取模型列表"}
+    except Exception as e:
+        return {"success": False, "models": [], "message": str(e)}
 
 @app.get("/api/history")
 async def get_history(limit: int = 10):
@@ -154,7 +162,6 @@ async def get_history(limit: int = 10):
         cursor.close()
         conn.close()
         
-        # 转换日期为字符串
         for record in records:
             if record['created_at']:
                 record['created_at'] = record['created_at'].strftime('%Y-%m-%d %H:%M:%S')
