@@ -88,6 +88,84 @@
                     <el-form-item v-if="selectedDocType === '租赁合同'" label="租期">
                       <el-input v-model="formData.term" placeholder="请输入租期" />
                     </el-form-item>
+                    <!-- 离婚协议书字段 -->
+                    <el-form-item v-if="selectedDocType === '离婚协议书'" label="男方姓名">
+                    <el-input v-model="formData.husband" placeholder="请输入男方姓名" />
+                    </el-form-item>
+  <el-form-item v-if="selectedDocType === '离婚协议书'" label="女方姓名">
+    <el-input v-model="formData.wife" placeholder="请输入女方姓名" />
+  </el-form-item>
+  <el-form-item v-if="selectedDocType === '离婚协议书'" label="子女抚养">
+    <el-input type="textarea" v-model="formData.child_custody" :rows="2" placeholder="请输入子女抚养权归属" />
+  </el-form-item>
+  <el-form-item v-if="selectedDocType === '离婚协议书'" label="财产分割">
+    <el-input type="textarea" v-model="formData.property_split" :rows="2" placeholder="请输入财产分割方案" />
+  </el-form-item>
+
+  <!-- 股权转让协议字段 -->
+  <el-form-item v-if="selectedDocType === '股权转让协议'" label="转让方">
+    <el-input v-model="formData.transferor" placeholder="请输入转让方姓名" />
+  </el-form-item>
+  <el-form-item v-if="selectedDocType === '股权转让协议'" label="受让方">
+    <el-input v-model="formData.transferee" placeholder="请输入受让方姓名" />
+  </el-form-item>
+  <el-form-item v-if="selectedDocType === '股权转让协议'" label="公司名称">
+    <el-input v-model="formData.company_name" placeholder="请输入目标公司名称" />
+  </el-form-item>
+  <el-form-item v-if="selectedDocType === '股权转让协议'" label="股权比例">
+    <el-input v-model="formData.share_ratio" placeholder="如：50%" />
+  </el-form-item>
+  <el-form-item v-if="selectedDocType === '股权转让协议'" label="转让价格">
+    <el-input v-model="formData.share_price" placeholder="请输入转让价格" />
+  </el-form-item>
+
+  <!-- 保密协议字段 -->
+  <el-form-item v-if="selectedDocType === '保密协议'" label="甲方">
+    <el-input v-model="formData.employer" placeholder="请输入甲方名称" />
+  </el-form-item>
+  <el-form-item v-if="selectedDocType === '保密协议'" label="乙方">
+    <el-input v-model="formData.employee" placeholder="请输入乙方名称" />
+  </el-form-item>
+  <el-form-item v-if="selectedDocType === '保密协议'" label="保密范围">
+    <el-input v-model="formData.保密范围" placeholder="请输入保密信息范围" />
+  </el-form-item>
+  <el-form-item v-if="selectedDocType === '保密协议'" label="保密期限">
+    <el-input v-model="formData.保密期限" placeholder="如：两年" />
+  </el-form-item>
+
+  <!-- 房屋买卖合同字段 -->
+  <el-form-item v-if="selectedDocType === '房屋买卖合同'" label="卖方">
+    <el-input v-model="formData.seller" placeholder="请输入卖方姓名" />
+  </el-form-item>
+  <el-form-item v-if="selectedDocType === '房屋买卖合同'" label="买方">
+    <el-input v-model="formData.buyer" placeholder="请输入买方姓名" />
+  </el-form-item>
+  <el-form-item v-if="selectedDocType === '房屋买卖合同'" label="房屋地址">
+    <el-input v-model="formData.house_address" placeholder="请输入房屋地址" />
+  </el-form-item>
+  <el-form-item v-if="selectedDocType === '房屋买卖合同'" label="房屋面积">
+    <el-input v-model="formData.house_area" placeholder="如：120平方米" />
+  </el-form-item>
+  <el-form-item v-if="selectedDocType === '房屋买卖合同'" label="成交价格">
+    <el-input v-model="formData.house_price" placeholder="请输入成交价格" />
+  </el-form-item>
+
+  <!-- 委托代理书字段 -->
+  <el-form-item v-if="selectedDocType === '委托代理书'" label="委托人">
+    <el-input v-model="formData.client" placeholder="请输入委托人姓名" />
+  </el-form-item>
+  <el-form-item v-if="selectedDocType === '委托代理书'" label="受托人">
+    <el-input v-model="formData.agent" placeholder="请输入受托人姓名" />
+  </el-form-item>
+  <el-form-item v-if="selectedDocType === '委托代理书'" label="代理事项">
+    <el-input v-model="formData.代理事项" placeholder="请输入代理事项" />
+  </el-form-item>
+  <el-form-item v-if="selectedDocType === '委托代理书'" label="代理权限">
+    <el-input v-model="formData.代理权限" placeholder="请输入代理权限范围" />
+  </el-form-item>
+  <el-form-item v-if="selectedDocType === '委托代理书'" label="代理期限">
+    <el-input v-model="formData.代理期限" placeholder="如：一年" />
+  </el-form-item>
                   </el-form>
 
                   <el-button type="primary" @click="generateDoc" style="width: 100%; margin-top: 20px;">
@@ -177,10 +255,26 @@ const generatedContent = ref('')
 const errorMsg = ref('')
 
 const formData = ref({
+  // 劳动合同
   party_a: '', party_b: '', term: '', salary: '',
+  // 民事起诉状
   plaintiff: '', defendant: '', claim: '', reason: '',
+  // 借条
   lender: '', borrower: '', amount: '', repay_date: '',
-  landlord: '', tenant: '', property: '', rent: ''
+  // 租赁合同
+  landlord: '', tenant: '', property: '', rent: '',
+  // 离婚协议书
+  husband: '', wife: '', child_custody: '', property_split: '',
+  // 股权转让协议
+  transferor: '', transferee: '', company_name: '', share_ratio: '',
+  share_price: '', payment_method: '',
+  // 保密协议
+  employer: '', employee: '',保密范围: '',保密期限: '',
+  // 房屋买卖合同
+  seller: '', buyer: '', house_address: '', house_area: '',
+  house_price: '', payment_time: '',
+  // 委托代理书
+  client: '', agent: '',代理事项: '',代理权限: '',代理期限: ''
 })
 
 // 历史记录

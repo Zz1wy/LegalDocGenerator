@@ -88,6 +88,53 @@ def build_prompt(doc_type: str, fields: dict) -> str:
 3. 包含双方权利义务条款
 4. 包含违约金条款
 5. 包含签名日期栏
+请直接输出文书内容，不要解释。""",
+
+        "离婚协议书": f"""请生成一份规范的离婚协议书，包含以下信息：{field_str}
+要求：
+1. 格式规范，包含男方女方基本信息
+2. 明确子女抚养权归属及抚养费
+3. 明确夫妻共同财产分割方案
+4. 明确债务承担方式
+5. 包含双方签名栏和日期
+请直接输出文书内容，不要解释。""",
+
+        "股权转让协议": f"""请生成一份规范的股权转让协议，包含以下信息：{field_str}
+要求：
+1. 格式规范，包含转让方和受让方基本信息
+2. 明确目标公司信息和股权转让比例
+3. 明确股权转让价格及付款方式
+4. 包含陈述与保证条款
+5. 包含违约责任和争议解决条款
+6. 包含双方签名栏和日期
+请直接输出文书内容，不要解释。""",
+
+        "保密协议": f"""请生成一份规范的保密协议（NDA），包含以下信息：{field_str}
+要求：
+1. 格式规范，包含甲方乙方基本信息
+2. 明确保密信息的定义和范围
+3. 明确保密期限和保密义务
+4. 明确违约责任和赔偿条款
+5. 包含双方签名栏和日期
+请直接输出文书内容，不要解释。""",
+
+        "房屋买卖合同": f"""请生成一份规范的房屋买卖合同，包含以下信息：{field_str}
+要求：
+1. 格式规范，包含卖方买方基本信息
+2. 明确房屋基本情况（地址、面积、产权证号）
+3. 明确成交价格及付款方式
+4. 明确交付时间和过户时间
+5. 包含税费约定和违约责任
+6. 包含双方签名栏和日期
+请直接输出文书内容，不要解释。""",
+
+        "委托代理书": f"""请生成一份规范的委托代理书，包含以下信息：{field_str}
+要求：
+1. 格式规范，包含委托人和受托人基本信息
+2. 明确委托事项和权限范围
+3. 明确委托期限
+4. 明确双方权利义务
+5. 包含双方签名栏和日期
 请直接输出文书内容，不要解释。"""
     }
     
@@ -106,7 +153,12 @@ async def get_doc_types():
             {"id": 1, "name": "劳动合同", "category": "劳动"},
             {"id": 2, "name": "民事起诉状", "category": "诉讼"},
             {"id": 3, "name": "借条", "category": "借贷"},
-            {"id": 4, "name": "租赁合同", "category": "租赁"}
+            {"id": 4, "name": "租赁合同", "category": "租赁"},
+            {"id": 5, "name": "离婚协议书", "category": "婚姻"},
+            {"id": 6, "name": "股权转让协议", "category": "商业"},
+            {"id": 7, "name": "保密协议", "category": "商业"},
+            {"id": 8, "name": "房屋买卖合同", "category": "房地产"},
+            {"id": 9, "name": "委托代理书", "category": "委托"}
         ]
     return templates
 
@@ -114,33 +166,18 @@ async def get_doc_types():
 async def generate_document(request: GenerateRequest):
     """生成文书（使用大语言模型）"""
     try:
-        # 检查字段是否有值
         has_values = any(v for v in request.fields.values() if v)
         
         if not has_values:
             return {"success": False, "content": "", "message": "请填写至少一个字段"}
         
-        # 调用大语言模型生成
         content = await generate_with_ai(request.doc_type, request.fields)
         
-        # 保存到数据库
         save_generated_record(request.doc_type, request.fields, content)
         
         return {"success": True, "content": content}
     except Exception as e:
         return {"success": False, "content": "", "message": str(e)}
-
-@app.get("/api/models")
-async def get_available_models():
-    """获取可用的模型列表"""
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(f"{OLLAMA_HOST}/api/tags")
-            if response.status_code == 200:
-                return {"success": True, "models": response.json().get("models", [])}
-            return {"success": False, "models": [], "message": "无法获取模型列表"}
-    except Exception as e:
-        return {"success": False, "models": [], "message": str(e)}
 
 @app.get("/api/history")
 async def get_history(limit: int = 10):
