@@ -1,33 +1,44 @@
 <template>
   <div id="app">
-    <el-container style="height: 100vh;">
+    <el-container style="min-height: 100vh;">
       <!-- 头部 -->
-      <el-header style="background-color: #409EFF; color: white; line-height: 60px;">
-        <h1 style="margin: 0; color: white;">智能法律文书辅助生成系统</h1>
+      <el-header style="background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%); color: white; line-height: 60px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <h1 style="margin: 0; font-size: 20px; font-weight: 600;">⚖️ 智能法律文书辅助生成系统</h1>
+          <span style="font-size: 14px; opacity: 0.9;">专业 · 高效 · 安全</span>
+        </div>
       </el-header>
 
-      <el-main style="background-color: #f5f5f5;">
-        <el-alert v-if="errorMsg" :title="errorMsg" type="error" style="margin-bottom: 20px;" />
+      <el-main style="background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%); padding: 20px;">
+        <transition name="fade">
+          <el-alert v-if="errorMsg" :title="errorMsg" type="error" style="margin-bottom: 20px;" />
+        </transition>
 
-        <el-tabs v-model="activeTab" type="card">
+        <el-tabs v-model="activeTab" type="card" style="background: white; border-radius: 8px; overflow: hidden;">
           <!-- 生成页面 -->
-          <el-tab-pane label="文书生成" name="generate">
-            <el-row :gutter="20">
+          <el-tab-pane label="📝 文书生成" name="generate">
+            <el-row :gutter="20" style="margin-top: 20px;">
               <el-col :span="8">
                 <el-card style="margin-bottom: 20px;">
                   <template #header>
-                    <span>选择文书类型</span>
+                    <span style="font-weight: 600;">📋 选择文书类型</span>
                   </template>
                   <el-radio-group v-model="selectedDocType">
-                    <el-radio v-for="doc in docTypes" :key="doc.id" :value="doc.name" style="display: block; margin-bottom: 10px;">
-                      {{ doc.name }}
+                    <el-radio 
+                      v-for="doc in docTypes" 
+                      :key="doc.id" 
+                      :value="doc.name" 
+                      style="display: block; margin-bottom: 10px; padding: 8px; border-radius: 6px;"
+                    >
+                      <span>{{ doc.name }}</span>
+                      <span style="float: right; font-size: 12px; color: #64748b; background: #f1f5f9; padding: 2px 8px; border-radius: 10px;">{{ doc.category }}</span>
                     </el-radio>
                   </el-radio-group>
                 </el-card>
 
                 <el-card>
                   <template #header>
-                    <span>填写信息</span>
+                    <span style="font-weight: 600;">✏️ 填写信息</span>
                   </template>
                   <el-form :model="formData" label-width="100px">
                     <!-- 劳动合同字段 -->
@@ -88,88 +99,94 @@
                     <el-form-item v-if="selectedDocType === '租赁合同'" label="租期">
                       <el-input v-model="formData.term" placeholder="请输入租期" />
                     </el-form-item>
+
                     <!-- 离婚协议书字段 -->
                     <el-form-item v-if="selectedDocType === '离婚协议书'" label="男方姓名">
-                    <el-input v-model="formData.husband" placeholder="请输入男方姓名" />
+                      <el-input v-model="formData.husband" placeholder="请输入男方姓名" />
                     </el-form-item>
-  <el-form-item v-if="selectedDocType === '离婚协议书'" label="女方姓名">
-    <el-input v-model="formData.wife" placeholder="请输入女方姓名" />
-  </el-form-item>
-  <el-form-item v-if="selectedDocType === '离婚协议书'" label="子女抚养">
-    <el-input type="textarea" v-model="formData.child_custody" :rows="2" placeholder="请输入子女抚养权归属" />
-  </el-form-item>
-  <el-form-item v-if="selectedDocType === '离婚协议书'" label="财产分割">
-    <el-input type="textarea" v-model="formData.property_split" :rows="2" placeholder="请输入财产分割方案" />
-  </el-form-item>
+                    <el-form-item v-if="selectedDocType === '离婚协议书'" label="女方姓名">
+                      <el-input v-model="formData.wife" placeholder="请输入女方姓名" />
+                    </el-form-item>
+                    <el-form-item v-if="selectedDocType === '离婚协议书'" label="子女抚养">
+                      <el-input type="textarea" v-model="formData.child_custody" :rows="2" placeholder="请输入子女抚养权归属" />
+                    </el-form-item>
+                    <el-form-item v-if="selectedDocType === '离婚协议书'" label="财产分割">
+                      <el-input type="textarea" v-model="formData.property_split" :rows="2" placeholder="请输入财产分割方案" />
+                    </el-form-item>
 
-  <!-- 股权转让协议字段 -->
-  <el-form-item v-if="selectedDocType === '股权转让协议'" label="转让方">
-    <el-input v-model="formData.transferor" placeholder="请输入转让方姓名" />
-  </el-form-item>
-  <el-form-item v-if="selectedDocType === '股权转让协议'" label="受让方">
-    <el-input v-model="formData.transferee" placeholder="请输入受让方姓名" />
-  </el-form-item>
-  <el-form-item v-if="selectedDocType === '股权转让协议'" label="公司名称">
-    <el-input v-model="formData.company_name" placeholder="请输入目标公司名称" />
-  </el-form-item>
-  <el-form-item v-if="selectedDocType === '股权转让协议'" label="股权比例">
-    <el-input v-model="formData.share_ratio" placeholder="如：50%" />
-  </el-form-item>
-  <el-form-item v-if="selectedDocType === '股权转让协议'" label="转让价格">
-    <el-input v-model="formData.share_price" placeholder="请输入转让价格" />
-  </el-form-item>
+                    <!-- 股权转让协议字段 -->
+                    <el-form-item v-if="selectedDocType === '股权转让协议'" label="转让方">
+                      <el-input v-model="formData.transferor" placeholder="请输入转让方姓名" />
+                    </el-form-item>
+                    <el-form-item v-if="selectedDocType === '股权转让协议'" label="受让方">
+                      <el-input v-model="formData.transferee" placeholder="请输入受让方姓名" />
+                    </el-form-item>
+                    <el-form-item v-if="selectedDocType === '股权转让协议'" label="公司名称">
+                      <el-input v-model="formData.company_name" placeholder="请输入目标公司名称" />
+                    </el-form-item>
+                    <el-form-item v-if="selectedDocType === '股权转让协议'" label="股权比例">
+                      <el-input v-model="formData.share_ratio" placeholder="如：50%" />
+                    </el-form-item>
+                    <el-form-item v-if="selectedDocType === '股权转让协议'" label="转让价格">
+                      <el-input v-model="formData.share_price" placeholder="请输入转让价格" />
+                    </el-form-item>
 
-  <!-- 保密协议字段 -->
-  <el-form-item v-if="selectedDocType === '保密协议'" label="甲方">
-    <el-input v-model="formData.employer" placeholder="请输入甲方名称" />
-  </el-form-item>
-  <el-form-item v-if="selectedDocType === '保密协议'" label="乙方">
-    <el-input v-model="formData.employee" placeholder="请输入乙方名称" />
-  </el-form-item>
-  <el-form-item v-if="selectedDocType === '保密协议'" label="保密范围">
-    <el-input v-model="formData.保密范围" placeholder="请输入保密信息范围" />
-  </el-form-item>
-  <el-form-item v-if="selectedDocType === '保密协议'" label="保密期限">
-    <el-input v-model="formData.保密期限" placeholder="如：两年" />
-  </el-form-item>
+                    <!-- 保密协议字段 -->
+                    <el-form-item v-if="selectedDocType === '保密协议'" label="甲方">
+                      <el-input v-model="formData.employer" placeholder="请输入甲方名称" />
+                    </el-form-item>
+                    <el-form-item v-if="selectedDocType === '保密协议'" label="乙方">
+                      <el-input v-model="formData.employee" placeholder="请输入乙方名称" />
+                    </el-form-item>
+                    <el-form-item v-if="selectedDocType === '保密协议'" label="保密范围">
+                      <el-input v-model="formData.confidential_scope" placeholder="请输入保密信息范围" />
+                    </el-form-item>
+                    <el-form-item v-if="selectedDocType === '保密协议'" label="保密期限">
+                      <el-input v-model="formData.confidential_period" placeholder="如：两年" />
+                    </el-form-item>
 
-  <!-- 房屋买卖合同字段 -->
-  <el-form-item v-if="selectedDocType === '房屋买卖合同'" label="卖方">
-    <el-input v-model="formData.seller" placeholder="请输入卖方姓名" />
-  </el-form-item>
-  <el-form-item v-if="selectedDocType === '房屋买卖合同'" label="买方">
-    <el-input v-model="formData.buyer" placeholder="请输入买方姓名" />
-  </el-form-item>
-  <el-form-item v-if="selectedDocType === '房屋买卖合同'" label="房屋地址">
-    <el-input v-model="formData.house_address" placeholder="请输入房屋地址" />
-  </el-form-item>
-  <el-form-item v-if="selectedDocType === '房屋买卖合同'" label="房屋面积">
-    <el-input v-model="formData.house_area" placeholder="如：120平方米" />
-  </el-form-item>
-  <el-form-item v-if="selectedDocType === '房屋买卖合同'" label="成交价格">
-    <el-input v-model="formData.house_price" placeholder="请输入成交价格" />
-  </el-form-item>
+                    <!-- 房屋买卖合同字段 -->
+                    <el-form-item v-if="selectedDocType === '房屋买卖合同'" label="卖方">
+                      <el-input v-model="formData.seller" placeholder="请输入卖方姓名" />
+                    </el-form-item>
+                    <el-form-item v-if="selectedDocType === '房屋买卖合同'" label="买方">
+                      <el-input v-model="formData.buyer" placeholder="请输入买方姓名" />
+                    </el-form-item>
+                    <el-form-item v-if="selectedDocType === '房屋买卖合同'" label="房屋地址">
+                      <el-input v-model="formData.house_address" placeholder="请输入房屋地址" />
+                    </el-form-item>
+                    <el-form-item v-if="selectedDocType === '房屋买卖合同'" label="房屋面积">
+                      <el-input v-model="formData.house_area" placeholder="如：120平方米" />
+                    </el-form-item>
+                    <el-form-item v-if="selectedDocType === '房屋买卖合同'" label="成交价格">
+                      <el-input v-model="formData.house_price" placeholder="请输入成交价格" />
+                    </el-form-item>
 
-  <!-- 委托代理书字段 -->
-  <el-form-item v-if="selectedDocType === '委托代理书'" label="委托人">
-    <el-input v-model="formData.client" placeholder="请输入委托人姓名" />
-  </el-form-item>
-  <el-form-item v-if="selectedDocType === '委托代理书'" label="受托人">
-    <el-input v-model="formData.agent" placeholder="请输入受托人姓名" />
-  </el-form-item>
-  <el-form-item v-if="selectedDocType === '委托代理书'" label="代理事项">
-    <el-input v-model="formData.代理事项" placeholder="请输入代理事项" />
-  </el-form-item>
-  <el-form-item v-if="selectedDocType === '委托代理书'" label="代理权限">
-    <el-input v-model="formData.代理权限" placeholder="请输入代理权限范围" />
-  </el-form-item>
-  <el-form-item v-if="selectedDocType === '委托代理书'" label="代理期限">
-    <el-input v-model="formData.代理期限" placeholder="如：一年" />
-  </el-form-item>
+                    <!-- 委托代理书字段 -->
+                    <el-form-item v-if="selectedDocType === '委托代理书'" label="委托人">
+                      <el-input v-model="formData.client" placeholder="请输入委托人姓名" />
+                    </el-form-item>
+                    <el-form-item v-if="selectedDocType === '委托代理书'" label="受托人">
+                      <el-input v-model="formData.agent" placeholder="请输入受托人姓名" />
+                    </el-form-item>
+                    <el-form-item v-if="selectedDocType === '委托代理书'" label="代理事项">
+                      <el-input v-model="formData.matter" placeholder="请输入代理事项" />
+                    </el-form-item>
+                    <el-form-item v-if="selectedDocType === '委托代理书'" label="代理权限">
+                      <el-input v-model="formData.authority" placeholder="请输入代理权限范围" />
+                    </el-form-item>
+                    <el-form-item v-if="selectedDocType === '委托代理书'" label="代理期限">
+                      <el-input v-model="formData.period" placeholder="如：一年" />
+                    </el-form-item>
                   </el-form>
 
-                  <el-button type="primary" @click="generateDoc" style="width: 100%; margin-top: 20px;">
-                    生成文书
+                  <el-button 
+                    type="primary" 
+                    @click="generateDoc" 
+                    style="width: 100%; margin-top: 20px;"
+                    :loading="isLoading"
+                  >
+                    {{ isLoading ? '⏳ 生成中...' : '🚀 生成文书' }}
                   </el-button>
                 </el-card>
               </el-col>
@@ -177,13 +194,19 @@
               <el-col :span="16">
                 <el-card>
                   <template #header>
-                    <span>生成结果</span>
+                    <span style="font-weight: 600;">📄 生成结果</span>
                   </template>
-                  <el-scrollbar style="height: 400px; background-color: white; padding: 10px;">
-                    <pre style="margin: 0; white-space: pre-wrap;">{{ generatedContent || '请选择文书类型并填写信息，然后点击"生成文书"' }}</pre>
+                  <el-scrollbar style="height: 450px; background-color: #fafafa; border-radius: 6px; padding: 15px;">
+                    <transition name="fade">
+                      <pre v-if="generatedContent" style="margin: 0; white-space: pre-wrap; font-family: 'SimSun', 'Songti SC', serif; font-size: 14px; line-height: 1.8; color: #1e293b;">{{ generatedContent }}</pre>
+                      <div v-else style="text-align: center; padding: 100px 20px; color: #94a3b8;">
+                        <div style="font-size: 48px; margin-bottom: 20px;">📝</div>
+                        <p style="font-size: 16px;">请选择文书类型并填写信息，然后点击"生成文书"</p>
+                      </div>
+                    </transition>
                   </el-scrollbar>
                   <el-button type="success" @click="exportDoc" style="margin-top: 20px;" :disabled="!generatedContent">
-                    导出文档
+                    📥 导出文档
                   </el-button>
                 </el-card>
               </el-col>
@@ -191,47 +214,61 @@
           </el-tab-pane>
 
           <!-- 历史记录页面 -->
-          <el-tab-pane label="历史记录" name="history">
-            <el-card>
+          <el-tab-pane label="📜 历史记录" name="history">
+            <el-card style="margin-top: 20px;">
               <template #header>
-                <span>生成历史记录</span>
+                <span style="font-weight: 600;">📋 生成历史记录</span>
                 <el-button type="primary" size="small" @click="loadHistory" style="float: right;">
-                  刷新记录
+                  🔄 刷新记录
                 </el-button>
               </template>
-
-              <el-table :data="historyRecords" border style="width: 100%;">
-                <el-table-column prop="id" label="ID" width="80" />
-                <el-table-column prop="doc_type" label="文书类型" width="150" />
-                <el-table-column prop="created_at" label="生成时间" width="180" />
-                <el-table-column prop="input_fields" label="输入信息" width="250">
-                  <template #default="scope">
-                    <span>{{ formatFields(scope.row.input_fields) }}</span>
-                  </template>
-                </el-table-column>
-                <el-table-column label="操作" width="200">
-                  <template #default="scope">
-                    <el-button type="text" @click="viewRecord(scope.row)">查看详情</el-button>
-                    <el-button type="text" @click="exportRecord(scope.row)">导出</el-button>
-                  </template>
-                </el-table-column>
-              </el-table>
-
-              <div v-if="historyRecords.length === 0" style="text-align: center; padding: 40px;">
-                <el-empty description="暂无历史记录" />
-              </div>
+              <transition name="fade">
+                <el-table 
+                  v-if="historyRecords.length > 0"
+                  :data="historyRecords" 
+                  border 
+                  style="width: 100%;"
+                >
+                  <el-table-column prop="id" label="ID" width="80" />
+                  <el-table-column prop="doc_type" label="文书类型" width="150">
+                    <template #default="scope">
+                      <span style="background: #dbeafe; color: #1d4ed8; padding: 2px 8px; border-radius: 4px; font-size: 12px;">{{ scope.row.doc_type }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column prop="created_at" label="生成时间" width="180" />
+                  <el-table-column prop="input_fields" label="输入信息" width="250">
+                    <template #default="scope">
+                      <span>{{ formatFields(scope.row.input_fields) }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="操作" width="200">
+                    <template #default="scope">
+                      <el-button type="primary" size="small" @click="viewRecord(scope.row)">👁️ 查看</el-button>
+                      <el-button type="success" size="small" @click="exportRecord(scope.row)">📥 导出</el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+                <div v-else style="text-align: center; padding: 60px;">
+                  <el-empty description="暂无历史记录" />
+                </div>
+              </transition>
             </el-card>
           </el-tab-pane>
         </el-tabs>
 
         <!-- 详情弹窗 -->
-        <el-dialog title="文书详情" :visible.sync="showDetail" width="800px">
-          <el-scrollbar style="height: 400px;">
-            <pre style="white-space: pre-wrap;">{{ selectedRecord?.generated_content }}</pre>
+        <el-dialog 
+          title="📄 文书详情" 
+          :visible.sync="showDetail" 
+          width="800px"
+          :close-on-click-modal="false"
+        >
+          <el-scrollbar style="height: 450px;">
+            <pre style="white-space: pre-wrap; font-family: 'SimSun', 'Songti SC', serif; font-size: 14px; line-height: 1.8;">{{ selectedRecord?.generated_content }}</pre>
           </el-scrollbar>
           <template #footer>
-            <el-button @click="showDetail = false">关闭</el-button>
-            <el-button type="success" @click="exportRecord(selectedRecord)">导出文档</el-button>
+            <el-button @click="showDetail = false">✖️ 关闭</el-button>
+            <el-button type="success" @click="exportRecord(selectedRecord)">📥 导出文档</el-button>
           </template>
         </el-dialog>
       </el-main>
@@ -243,44 +280,33 @@
 import { ref, onMounted } from 'vue'
 import axios from 'axios'
 
-// 页面状态
+const isLoading = ref(false)
+
 const activeTab = ref('generate')
 const showDetail = ref(false)
 const selectedRecord = ref(null)
 
-// 文书类型和表单数据
 const docTypes = ref([])
 const selectedDocType = ref('')
 const generatedContent = ref('')
 const errorMsg = ref('')
 
 const formData = ref({
-  // 劳动合同
   party_a: '', party_b: '', term: '', salary: '',
-  // 民事起诉状
   plaintiff: '', defendant: '', claim: '', reason: '',
-  // 借条
   lender: '', borrower: '', amount: '', repay_date: '',
-  // 租赁合同
   landlord: '', tenant: '', property: '', rent: '',
-  // 离婚协议书
   husband: '', wife: '', child_custody: '', property_split: '',
-  // 股权转让协议
   transferor: '', transferee: '', company_name: '', share_ratio: '',
   share_price: '', payment_method: '',
-  // 保密协议
-  employer: '', employee: '',保密范围: '',保密期限: '',
-  // 房屋买卖合同
+  employer: '', employee: '', confidential_scope: '', confidential_period: '',
   seller: '', buyer: '', house_address: '', house_area: '',
   house_price: '', payment_time: '',
-  // 委托代理书
-  client: '', agent: '',代理事项: '',代理权限: '',代理期限: ''
+  client: '', agent: '', matter: '', authority: '', period: ''
 })
 
-// 历史记录
 const historyRecords = ref([])
 
-// 获取文书类型
 onMounted(async () => {
   await loadDocTypes()
   await loadHistory()
@@ -299,12 +325,13 @@ async function loadDocTypes() {
   }
 }
 
-// 生成文书
 async function generateDoc() {
   if (!selectedDocType.value) {
     errorMsg.value = '请先选择文书类型'
     return
   }
+  
+  isLoading.value = true
   try {
     errorMsg.value = ''
     const response = await axios.post('http://localhost:8000/api/generate', {
@@ -313,29 +340,28 @@ async function generateDoc() {
     })
     if (response.data.success) {
       generatedContent.value = response.data.content
-      await loadHistory() // 生成后刷新历史记录
+      await loadHistory()
     } else {
       errorMsg.value = '生成失败: ' + response.data.message
     }
   } catch (error) {
     console.error('生成失败:', error)
     errorMsg.value = '生成失败，请检查网络'
+  } finally {
+    isLoading.value = false
   }
 }
 
-// 导出当前文档
 function exportDoc() {
   if (!generatedContent.value) return
   downloadDoc(selectedDocType.value, generatedContent.value)
 }
 
-// 导出记录文档
 function exportRecord(record) {
   if (!record) return
   downloadDoc(record.doc_type, record.generated_content)
 }
 
-// 通用下载函数
 function downloadDoc(docType, content) {
   const blob = new Blob([content], { type: 'application/msword' })
   const url = URL.createObjectURL(blob)
@@ -345,10 +371,9 @@ function downloadDoc(docType, content) {
   a.click()
 }
 
-// 加载历史记录
 async function loadHistory() {
   try {
-    const response = await axios.get('http://localhost:8000/api/history')
+    const response = await axios.get('http://localhost:8000/api/history?limit=50')
     if (response.data.success) {
       historyRecords.value = response.data.records
     }
@@ -357,29 +382,77 @@ async function loadHistory() {
   }
 }
 
-// 查看记录详情
 function viewRecord(record) {
   selectedRecord.value = record
   showDetail.value = true
 }
 
-// 格式化输入字段
-function formatFields(fields) {
-  if (!fields) return ''
-  // 如果是字符串，尝试解析为对象
-  const data = typeof fields === 'string' ? JSON.parse(fields) : fields
-  const arr = []
-  for (const key in data) {
-    if (data[key]) {
-      arr.push(`${data[key]}`)
-    }
+function formatFields(inputFields) {
+  if (!inputFields) return ''
+  try {
+    const fields = typeof inputFields === 'string' ? JSON.parse(inputFields) : inputFields
+    return Object.entries(fields)
+      .filter(([_, value]) => value)
+      .map(([key, value]) => `${key}: ${value}`)
+      .join(', ')
+  } catch {
+    return inputFields
   }
-  return arr.join(' / ') || '无'
 }
 </script>
 
-<style>
-#app { 
-  font-family: 'Microsoft YaHei', sans-serif; 
+<style scoped>
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+.slide-fade-enter-active {
+  transition: all 0.3s ease-out;
+}
+
+.slide-fade-leave-active {
+  transition: all 0.2s ease-in;
+}
+
+.slide-fade-enter-from {
+  transform: translateX(-20px);
+  opacity: 0;
+}
+
+.slide-fade-leave-to {
+  transform: translateX(20px);
+  opacity: 0;
+}
+
+.el-card {
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+  transition: all 0.3s ease;
+}
+
+.el-card:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+.el-button--primary {
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+  border: none;
+  border-radius: 6px;
+}
+
+.el-button--primary:hover {
+  background: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%);
+}
+
+.el-button--success {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  border: none;
+  border-radius: 6px;
 }
 </style>
