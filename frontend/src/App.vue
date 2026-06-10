@@ -285,6 +285,13 @@
                   border 
                   style="width: 100%;"
                 >
+                <!-- 新增：序号列 -->
+                <el-table-column label="序号" width="80">
+                  <template #default="scope">
+                  {{ (currentPage - 1) * pageSize + scope.$index + 1 }}
+                  </template>
+                </el-table-column>
+                
                   <el-table-column prop="id" label="ID" width="80" />
                   <el-table-column prop="doc_type" label="文书类型" width="150">
                     <template #default="scope">
@@ -297,10 +304,11 @@
                       <span>{{ formatFields(scope.row.input_fields) }}</span>
                     </template>
                   </el-table-column>
-                  <el-table-column label="操作" width="200">
-                    <template #default="scope">
+                  <el-table-column label="操作" width="280">
+                      <template #default="scope">
                       <el-button type="primary" size="small" @click="viewRecord(scope.row)">👁️ 查看</el-button>
                       <el-button type="success" size="small" @click="exportRecord(scope.row)">📥 导出</el-button>
+                      <el-button type="danger" size="small" @click="deleteRecord(scope.row.id)">🗑️ 删除</el-button>
                     </template>
                   </el-table-column>
                 </el-table>
@@ -326,7 +334,7 @@
         <!-- 详情弹窗 -->
         <el-dialog 
           title="📄 文书详情" 
-          :visible.sync="showDetail" 
+          v-model="showDetail" 
           width="800px"
           :close-on-click-modal="false"
         >
@@ -506,6 +514,29 @@ async function loadHistory() {
 function viewRecord(record) {
   selectedRecord.value = record
   showDetail.value = true
+}
+
+async function deleteRecord(recordId) {
+  if (!recordId) return
+  
+  // 确认对话框
+  if (!confirm('确定要删除这条记录吗？此操作不可恢复。')) {
+    return
+  }
+  
+  try {
+    const response = await axios.delete(`http://localhost:8000/api/history/${recordId}`)
+    if (response.data.success) {
+      // 删除成功，刷新列表
+      await loadHistory()
+      alert('删除成功')
+    } else {
+      alert('删除失败: ' + response.data.message)
+    }
+  } catch (error) {
+    console.error('删除失败:', error)
+    alert('删除失败，请检查网络')
+  }
 }
 
 function formatFields(inputFields) {

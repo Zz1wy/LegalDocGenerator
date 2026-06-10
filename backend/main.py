@@ -207,6 +207,16 @@ async def get_history(limit: int = 10):
     except Exception as e:
         return {"success": False, "records": [], "message": str(e)}
 
+@app.delete("/api/history/{record_id}")
+async def delete_history_record(record_id: int):
+    """删除历史记录"""
+    from database import delete_record
+    success = delete_record(record_id)
+    if success:
+        return {"success": True, "message": "删除成功"}
+    else:
+        return {"success": False, "message": "删除失败，记录不存在"}
+
 @app.get("/health")
 async def health_check():
     return {"status": "ok", "message": "服务运行正常"}

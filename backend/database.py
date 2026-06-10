@@ -64,6 +64,24 @@ def save_generated_record(doc_type: str, input_fields: dict, generated_content: 
         print(f"保存记录失败: {e}")
         return False
 
+def delete_record(record_id: int):
+    """删除指定记录"""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM generated_records WHERE id = %s", (record_id,))
+        conn.commit()
+        affected = cursor.rowcount
+        cursor.close()
+        conn.close()
+        return affected > 0
+    except mysql.connector.Error as e:
+        print(f"删除记录失败: {e}")
+        return False
+
 def test_connection():
     """测试数据库连接"""
     conn = get_db_connection()
