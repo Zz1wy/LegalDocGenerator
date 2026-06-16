@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
@@ -7,6 +7,21 @@ import json
 import httpx
 from dotenv import load_dotenv
 from database import get_all_templates, save_generated_record
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from jose import JWTError, jwt
+from datetime import datetime, timedelta
+from passlib.context import CryptContext
+
+# JWT 配置
+SECRET_KEY = os.getenv("SECRET_KEY", "default-secret-key-for-development-only")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_DAYS = 7
+
+# 认证方案
+security = HTTPBearer(auto_error=False)
+
+# 密码哈希配置
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 load_dotenv()
 
@@ -23,6 +38,21 @@ app.add_middleware(
 class GenerateRequest(BaseModel):
     doc_type: str
     fields: dict
+
+class UserRegister(BaseModel):
+    username: str
+    password: str
+    nickname: Optional[str] = None
+
+class UserLogin(BaseModel):
+    username: str
+    password: str
+
+class TokenResponse(BaseModel):
+    success: bool
+    token: Optional[str] = None
+    user: Optional[dict] = None
+    message: Optional[str] = None
 
 class GenerateResponse(BaseModel):
     success: bool
@@ -163,7 +193,7 @@ async def get_doc_types():
     return templates
 
 @app.post("/api/generate")
-async def generate_document(request: GenerateRequest):
+async def generate_document(request: GenerateRequest, credentials: HTTPAuthorizationCredentials = Depends(security)):
     """生成文书（使用大语言模型）"""
     try:
         has_values = any(v for v in request.fields.values() if v)
@@ -173,49 +203,68 @@ async def generate_document(request: GenerateRequest):
         
         content = await generate_with_ai(request.doc_type, request.fields)
         
-        save_generated_record(request.doc_type, request.fields, content)
+        # 获取当前用户ID（可选认证）
+        user_id = None
+        if credentials:
+            try:
+                token = credentials.credentials
+                payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+                user_id = payload.get("user_id")
+            except:
+                pass
+        
+        # 保存到数据库（带用户ID）
+        from database import save_generated_record_with_user
+        save_generated_record_with_user(request.doc_type, request.fields, content, user_id)
         
         return {"success": True, "content": content}
     except Exception as e:
         return {"success": False, "content": "", "message": str(e)}
 
 @app.get("/api/history")
-async def get_history(limit: int = 10):
-    """获取生成历史记录"""
-    from database import get_db_connection
-    conn = get_db_connection()
-    if not conn:
-        return {"success": False, "records": [], "message": "数据库连接失败"}
+async def get_history(limit: int = 50, credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """获取生成历史记录（已登录显示用户记录，未登录显示所有记录）"""
+    user_id = None
+    if credentials:
+        try:
+            token = credentials.credentials
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            user_id = payload.get("user_id")
+        except:
+            pass
     
-    try:
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("""
-            SELECT id, doc_type, input_fields, generated_content, created_at 
-            FROM generated_records 
-            ORDER BY created_at DESC 
-            LIMIT %s
-        """, (limit,))
-        records = cursor.fetchall()
-        cursor.close()
-        conn.close()
-        
-        for record in records:
-            if record['created_at']:
-                record['created_at'] = record['created_at'].strftime('%Y-%m-%d %H:%M:%S')
-        
-        return {"success": True, "records": records}
-    except Exception as e:
-        return {"success": False, "records": [], "message": str(e)}
+    from database import get_history_by_user, get_all_history
+    if user_id:
+        records = get_history_by_user(user_id, limit)
+    else:
+        records = get_all_history(limit)
+    
+    return {"success": True, "records": records}
 
 @app.delete("/api/history/{record_id}")
-async def delete_history_record(record_id: int):
-    """删除历史记录"""
-    from database import delete_record
-    success = delete_record(record_id)
+async def delete_history_record(record_id: int, credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """删除历史记录（只能删除自己的记录）"""
+    user_id = None
+    if credentials:
+        try:
+            token = credentials.credentials
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            user_id = payload.get("user_id")
+        except:
+            pass
+    
+    from database import delete_record_by_user, delete_record
+    if user_id:
+        # 已登录用户，只能删除自己的记录
+        success = delete_record_by_user(record_id, user_id)
+    else:
+        # 未登录用户，只能删除无用户关联的记录
+        success = delete_record(record_id)
+    
     if success:
         return {"success": True, "message": "删除成功"}
     else:
-        return {"success": False, "message": "删除失败，记录不存在"}
+        return {"success": False, "message": "记录不存在或无权删除"}
 
 @app.get("/health")
 async def health_check():
@@ -224,3 +273,106 @@ async def health_check():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+
+def get_password_hash(password: str) -> str:
+    """生成密码哈希（使用 bcrypt）"""
+    return pwd_context.hash(password)
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """验证密码"""
+    return pwd_context.verify(plain_password, hashed_password)
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    token = credentials.credentials
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: int = payload.get("user_id")
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="无效的认证凭据")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="无效的认证凭据")
+    
+    from database import get_user_by_id
+    user = get_user_by_id(user_id)
+    if user is None:
+        raise HTTPException(status_code=401, detail="用户不存在")
+    return user
+
+@app.post("/api/register")
+async def register(user_data: UserRegister):
+    """用户注册"""
+    from database import get_user_by_username, create_user
+    
+    # 检查用户名是否已存在
+    existing_user = get_user_by_username(user_data.username)
+    if existing_user:
+        return {"success": False, "message": "用户名已存在"}
+    
+    # 创建用户
+    hashed_password = get_password_hash(user_data.password)
+    user_id = create_user(user_data.username, hashed_password, user_data.nickname)
+    
+    if not user_id:
+        return {"success": False, "message": "注册失败"}
+    
+    # 生成 token
+    access_token = create_access_token(data={"user_id": user_id})
+    
+    return {
+        "success": True,
+        "token": access_token,
+        "user": {
+            "id": user_id,
+            "username": user_data.username,
+            "nickname": user_data.nickname or user_data.username
+        },
+        "message": "注册成功"
+    }
+
+@app.post("/api/login")
+async def login(login_data: UserLogin):
+    """用户登录"""
+    from database import get_user_by_username
+    
+    user = get_user_by_username(login_data.username)
+    if not user:
+        return {"success": False, "message": "用户名或密码错误"}
+    
+    if not verify_password(login_data.password, user["password"]):
+        return {"success": False, "message": "用户名或密码错误"}
+    
+    # 生成 token
+    access_token = create_access_token(data={"user_id": user["id"]})
+    
+    return {
+        "success": True,
+        "token": access_token,
+        "user": {
+            "id": user["id"],
+            "username": user["username"],
+            "nickname": user.get("nickname") or user["username"]
+        },
+        "message": "登录成功"
+    }
+
+@app.get("/api/user")
+async def get_user_info(current_user: dict = Depends(get_current_user)):
+    """获取当前用户信息"""
+    return {
+        "success": True,
+        "user": {
+            "id": current_user["id"],
+            "username": current_user["username"],
+            "nickname": current_user.get("nickname") or current_user["username"]
+        }
+    }

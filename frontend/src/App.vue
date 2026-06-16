@@ -1,13 +1,23 @@
 <template>
   <div id="app">
-    <el-container style="min-height: 100vh;">
-      <!-- 头部 -->
-      <el-header style="background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%); color: white; line-height: 60px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
-        <div style="display: flex; align-items: center; justify-content: space-between;">
-          <h1 style="margin: 0; font-size: 20px; font-weight: 600;">⚖️ 智能法律文书辅助生成系统</h1>
-          <span style="font-size: 14px; opacity: 0.9;">专业 · 高效 · 安全</span>
-        </div>
-      </el-header>
+    <!-- 未登录显示登录页 -->
+    <Login v-if="!isLoggedIn" @login-success="onLoginSuccess" />
+    
+    <!-- 已登录显示主应用 -->
+    <el-container v-else style="min-height: 100vh;">
+<el-header style="background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%); color: white; line-height: 60px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+  <div style="display: flex; align-items: center; justify-content: space-between;">
+    <h1 style="margin: 0; font-size: 20px; font-weight: 600;">⚖️ 智能法律文书辅助生成系统</h1>
+    <div style="display: flex; align-items: center; gap: 20px;">
+      <span style="font-size: 14px; opacity: 0.9;">专业 · 高效 · 安全</span>
+      <!-- 用户信息和退出按钮 -->
+      <div style="display: flex; align-items: center; gap: 15px;">
+        <span style="font-size: 14px;">👤 {{ currentUser?.nickname || currentUser?.username }}</span>
+        <el-button type="danger" size="small" @click="logout">🚪 退出登录</el-button>
+      </div>
+    </div>
+  </div>
+</el-header>
 
       <el-main style="background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%); padding: 20px;">
         <transition name="fade">
@@ -352,8 +362,52 @@
 </template>
 
 <script setup>
+
 import { ref, onMounted, computed } from 'vue'
 import axios from 'axios'
+import Login from './components/Login.vue'
+
+// 用户状态
+const isLoggedIn = ref(false)
+const currentUser = ref(null)
+
+// 检查登录状态
+function checkLoginStatus() {
+  const token = localStorage.getItem('token')
+  const user = localStorage.getItem('user')
+  if (token && user) {
+    isLoggedIn.value = true
+    currentUser.value = JSON.parse(user)
+    // 设置 axios 默认请求头
+    axios.defaults.headers.common['Authorization'] = `Bearer ${token}`
+  }
+}
+
+// 退出登录
+function logout() {
+  localStorage.removeItem('token')
+  localStorage.removeItem('user')
+  isLoggedIn.value = false
+  currentUser.value = null
+  delete axios.defaults.headers.common['Authorization']
+}
+
+// 登录成功处理
+function onLoginSuccess(user) {
+  isLoggedIn.value = true
+  currentUser.value = user
+  axios.defaults.headers.common['Authorization'] = `Bearer ${localStorage.getItem('token')}`
+    loadDocTypes()
+  loadHistory()
+}
+
+onMounted(() => {
+  checkLoginStatus()
+  if (isLoggedIn.value) {
+    loadDocTypes()
+    loadHistory()
+  }
+})
 
 const isLoading = ref(false)
 
