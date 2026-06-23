@@ -4,20 +4,20 @@
     <Login v-if="!isLoggedIn" @login-success="onLoginSuccess" />
     
     <!-- 已登录显示主应用 -->
-    <el-container v-else style="min-height: 100vh;">
-<el-header style="background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%); color: white; line-height: 60px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
-  <div style="display: flex; align-items: center; justify-content: space-between;">
-    <h1 style="margin: 0; font-size: 20px; font-weight: 600;">⚖️ 智能法律文书辅助生成系统</h1>
-    <div style="display: flex; align-items: center; gap: 20px;">
-      <span style="font-size: 14px; opacity: 0.9;">专业 · 高效 · 安全</span>
-      <!-- 用户信息和退出按钮 -->
-      <div style="display: flex; align-items: center; gap: 15px;">
-        <span style="font-size: 14px;">👤 {{ currentUser?.nickname || currentUser?.username }}</span>
-        <el-button type="danger" size="small" @click="logout">🚪 退出登录</el-button>
-      </div>
-    </div>
-  </div>
-</el-header>
+    <el-container style="min-height: 100vh;">
+      <el-header style="background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%); color: white; line-height: 60px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <h1 style="margin: 0; font-size: 20px; font-weight: 600;">⚖️ 智能法律文书辅助生成系统</h1>
+          <div style="display: flex; align-items: center; gap: 20px;">
+            <span style="font-size: 14px; opacity: 0.9;">专业 · 高效 · 安全</span>
+            <!-- 用户信息和退出按钮 -->
+            <div style="display: flex; align-items: center; gap: 15px;">
+              <span style="font-size: 14px;">👤 {{ currentUser?.nickname || currentUser?.username }}</span>
+              <el-button type="danger" size="small" @click="logout">🚪 退出登录</el-button>
+            </div>
+          </div>
+        </div>
+      </el-header>
 
       <el-main style="background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%); padding: 20px;">
         <transition name="fade">

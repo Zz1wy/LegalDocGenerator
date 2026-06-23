@@ -1,0 +1,31 @@
+# 虚拟环境（容器里不需要，会自己建）
+venv/
+.venv/
+env/
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# 敏感文件（用 docker-compose 的环境变量注入）
+.env
+.env.local
+.env.prod
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# 测试
+tests/
+test_*.py
+
+# 文档（排除根目录的 md，保留 rag/legal_data/ 中的法律数据）
+/README.md
+/*.md

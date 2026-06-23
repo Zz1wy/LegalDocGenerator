@@ -1,0 +1,100 @@
+# ===== 法律文书系统 Docker 编排 =====
+# 启动: docker-compose up -d
+# 停止: docker-compose down
+# 查看日志: docker-compose logs -f [服务名]
+
+services:
+  # ==================== 1. MySQL 数据库 ====================
+  mysql:
+    image: mysql:8.0
+    container_name: legal_doc_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-123456}
+      MYSQL_DATABASE: ${DB_NAME:-legal_doc_db}
+    volumes:
+      # 数据持久化：容器删除后数据不丢失
+      - mysql_data:/var/lib/mysql
+      # 初始化脚本：首次启动自动建表
+      - ./backend/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    ports:
+      - "3306:3306"
+    restart: always
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==================== 2. Ollama LLM 服务 ====================
+  ollama:
+    image: ollama/ollama:latest
+    container_name: legal_doc_ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  # ==================== 3. Ollama 模型初始化（一次性任务） ====================
+  # 这个服务在 ollama 就绪后自动下载模型，然后退出
+  ollama-init:
+    image: curlimages/curl:latest
+    container_name: legal_doc_ollama_init
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "正在下载 qwen2.5:7b 模型（可能需要几分钟）..."
+        curl -X POST http://ollama:11434/api/pull -d '{"name": "qwen2.5:7b"}'
+        echo "qwen2.5:7b 模型下载完成！"
+        echo "正在下载 nomic-embed-text 模型（用于 RAG 向量化）..."
+        curl -X POST http://ollama:11434/api/pull -d '{"name": "nomic-embed-text"}'
+        echo "所有模型就绪！"
+    restart: "no"
+
+  # ==================== 4. 后端 API ====================
+  backend:
+    build: ./backend
+    container_name: legal_doc_backend
+    environment:
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_USER=root
+      - DB_PASSWORD=${DB_PASSWORD:-123456}
+      - DB_NAME=${DB_NAME:-legal_doc_db}
+      - OLLAMA_HOST=http://ollama:11434
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+    volumes:
+      # ChromaDB 向量数据库持久化（避免每次重启重建知识库）
+      - chroma_data:/app/rag/chroma_db
+    ports:
+      - "8000:8000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    restart: always
+
+  # ==================== 5. 前端（含 Nginx） ====================
+  frontend:
+    build: ./frontend
+    container_name: legal_doc_frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: always
+
+volumes:
+  mysql_data:
+  ollama_data:
+  chroma_data:
+

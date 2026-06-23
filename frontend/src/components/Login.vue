@@ -66,7 +66,7 @@ async function handleSubmit() {
   loading.value = true
   try {
     const url = isLogin.value ? '/api/login' : '/api/register'
-    const response = await axios.post(`http://localhost:8000${url}`, {
+    const response = await axios.post(url, {
       username: form.username,
       password: form.password,
       nickname: form.nickname || undefined
