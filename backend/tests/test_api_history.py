@@ -10,6 +10,8 @@
 
 import pytest
 
+from main import create_access_token
+
 
 class TestHistoryRetrieval:
     """历史记录查询"""
@@ -30,14 +32,26 @@ class TestHistoryRetrieval:
         assert data["success"] is True
         assert len(data["records"]) == 1
 
-    def test_get_history_unauthenticated(self, client, mock_database):
-        """✅ 未登录用户获取所有历史"""
-        mock_database["all_history"].return_value = []
+    def test_get_history_unauthenticated(self, client):
+        """🔒 未登录用户不能读取任何历史记录（曾经的越权漏洞）"""
         response = client.get("/api/history")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["success"] is True
-        assert isinstance(data["records"], list)
+        assert response.status_code == 401
+
+    def test_get_history_with_invalid_token(self, client):
+        """🔒 伪造/过期的令牌必须 401，绝不能静默降级成「游客」"""
+        response = client.get(
+            "/api/history", headers={"Authorization": "Bearer not-a-real-token"}
+        )
+        assert response.status_code == 401
+
+    def test_get_history_with_token_of_deleted_user(self, client, mock_database):
+        """🔒 令牌合法但用户已被删除，也应 401"""
+        mock_database["user_by_id"].return_value = None
+        token = create_access_token(data={"user_id": 999})
+        response = client.get(
+            "/api/history", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert response.status_code == 401
 
     def test_get_history_empty(self, client, auth_headers, mock_database):
         """🔲 空历史记录"""
@@ -73,11 +87,22 @@ class TestHistoryDeletion:
         data = response.json()
         assert data["success"] is False
 
-    def test_delete_unauthenticated(self, client, mock_database):
-        """✅ 未登录用户删除记录"""
-        mock_database["delete"].return_value = True
+    def test_delete_unauthenticated(self, client):
+        """🔒 未登录用户不能删除任何记录（曾经的越权漏洞）"""
         response = client.delete("/api/history/1")
+        assert response.status_code == 401
+
+    def test_delete_others_record_is_rejected(self, client, auth_headers, mock_database):
+        """
+        🔒 无法删除别人的记录。
+
+        数据库层用 `WHERE id = %s AND user_id = %s` 保证：命中行数为 0 时返回值与
+        「记录不存在」完全一致，因此也不泄露「这条记录是否真的存在」。
+        """
+        mock_database["delete_user"].return_value = False  # 模拟 user_id 不匹配
+        response = client.delete("/api/history/1", headers=auth_headers)
         assert response.status_code == 200
+        assert response.json()["success"] is False
 
     def test_delete_record_id_zero(self, client, auth_headers):
         """🔲 非法 ID（0）"""

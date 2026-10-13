@@ -61,14 +61,23 @@ npm run dev
 ### 方式二：Docker 部署
 
 ```bash
-# 一键启动全部服务（需先解决 Docker Hub 网络问题）
+# 1. 配置根目录环境变量（docker-compose 读的是根目录的 .env）
+cp .env.example .env
+# 生成一个 JWT 密钥并填进 .env 的 SECRET_KEY
+python -c "import secrets; print(secrets.token_hex(32))"
+# 同时在 .env 里填好 DB_PASSWORD
+
+# 2. 一键启动全部服务（需先解决 Docker Hub 网络问题）
 docker-compose up -d
 
-# 确认服务状态
+# 3. 确认服务状态
 docker-compose ps
 
-# 访问 http://localhost
+# 4. 访问 http://localhost
 ```
+
+> SECRET_KEY 故意**没有默认值**：不配置的话 `docker-compose` 会直接报错退出。
+> 这是有意的 fail-closed 设计——宁可起不来，也不要带着一个人尽皆知的密钥上线。
 
 ## 📁 项目结构
 
@@ -148,11 +157,39 @@ document_templates   -- 文书模板表
 
 ## 🔒 安全说明
 
-- 密码使用 bcrypt 哈希存储
-- JWT Token 认证
-- SQL 注入防护（参数化查询）
-- .env 文件已加入 .gitignore，不会提交到仓库
-- 使用 `.env.example` 作为配置模板
+**认证与授权**
+
+- 密码使用 bcrypt 哈希存储（`passlib`），不落明文
+- JWT（HS256）令牌认证，有效期 7 天
+- **SECRET_KEY 快速失败校验**：密钥为空或仍为示例值时，应用直接拒绝启动，避免用可预测密钥静默上线
+- **认证失败绝不静默降级**：令牌无效/过期一律返回 401，不会被当成匿名请求处理
+- **数据隔离**：历史记录的读取与删除都强制要求登录，且 SQL 层用 `WHERE id = %s AND user_id = %s` 保证只能操作自己的记录
+- 运维接口 `POST /api/knowledge/reload` 需登录；配置 `ADMIN_USERNAMES` 后可进一步限制为管理员
+
+**输入与滥用防护**
+
+- SQL 注入防护（全程参数化查询，无字符串拼接）
+- 请求体规模限制：单次最多 50 个字段、单字段最长 10000 字，超出返回 422
+- 接口级限流（固定窗口）：登录/注册/生成/知识库重建各有独立配额，超限返回 429 + `Retry-After`
+- MySQL 端口只绑定宿主机回环地址，不对局域网暴露
+
+**配置管理**
+
+- `.env` 已加入 `.gitignore`，不会提交到仓库
+- 提供 `backend/.env.example`（本地运行）和根目录 `.env.example`（Docker 部署）作为模板
+
+### 已修复的已知问题（v2）
+
+| 问题 | 影响 | 修复 |
+|------|------|------|
+| 未登录可读取全库历史记录 | 越权访问，所有用户的文书互相可见 | 读取接口强制登录 |
+| 删除记录不校验归属 | 任何人可遍历 `record_id` 删光全站数据 | SQL 加 `user_id` 条件 |
+| 令牌无效被静默当作游客 | 访问控制形同虚设 | 统一 401，移除所有 `except: pass` |
+| `SECRET_KEY` 有可预测默认值 | 可离线伪造任意用户令牌 | 启动时快速失败校验 |
+| `/api/knowledge/reload` 不鉴权 | 匿名可反复触发全库重向量化（DoS） | 要求登录 + 管理员白名单 |
+| 请求体无大小限制 | 1MB 字段可撑爆 Prompt 上下文 | Pydantic 字段校验 |
+| 前端写死 `http://localhost:8000` | Docker 部署下非本机访问全部失败 | 改用相对路径 `/api/...` |
+| `onMounted` 注册了两次 | 挂载时接口被调用两遍 | 合并为单个 `onMounted` |
 
 ## 📝 后续规划
 

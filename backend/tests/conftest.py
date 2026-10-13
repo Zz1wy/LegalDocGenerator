@@ -24,6 +24,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # ==================== 环境变量 ====================
 os.environ["SECRET_KEY"] = "test-secret-key-for-pytest-only"
 os.environ["OLLAMA_HOST"] = "http://localhost:11434"
+# 关闭限流：测试会从同一个 TestClient IP 打出上百次请求，
+# 开着限流会大面积误报 429。限流逻辑本身在 tests/test_rate_limit.py 里单独测。
+os.environ["RATE_LIMIT_ENABLED"] = "false"
 
 # ==================== Mock 数据库（在 import main 之前） ====================
 _mock_conn = MagicMock()
@@ -45,9 +48,7 @@ patch("database.get_user_by_id", return_value={
     "id": 1, "username": "testuser", "nickname": "测试用户"
 }).start()
 patch("database.get_history_by_user", return_value=[]).start()
-patch("database.get_all_history", return_value=[]).start()
 patch("database.delete_record_by_user", return_value=True).start()
-patch("database.delete_record", return_value=True).start()
 
 # Mock Ollama
 _mock_ollama_response = MagicMock()
@@ -87,9 +88,7 @@ def _reset_mocks():
     db_module.get_user_by_username.return_value = None
     db_module.get_user_by_id.return_value = {"id": 1, "username": "testuser", "nickname": "测试用户"}
     db_module.get_history_by_user.return_value = []
-    db_module.get_all_history.return_value = []
     db_module.delete_record_by_user.return_value = True
-    db_module.delete_record.return_value = True
     yield
 
 
@@ -105,9 +104,7 @@ def mock_database():
         "user_by_id": db_module.get_user_by_id,
         "save_record": db_module.save_generated_record_with_user,
         "history": db_module.get_history_by_user,
-        "all_history": db_module.get_all_history,
         "delete_user": db_module.delete_record_by_user,
-        "delete": db_module.delete_record,
     }
 
 @pytest.fixture

@@ -206,7 +206,7 @@
                   <template #header>
                     <span style="font-weight: 600;">📄 生成结果</span>
                   </template>
-                  <el-scrollbar style="height: 450px; background-color: #fafafa; border-radius: 6px; padding: 15px;">
+                  <el-scrollbar ref="resultScrollbar" style="height: 450px; background-color: #fafafa; border-radius: 6px; padding: 15px;">
                     <transition name="fade">
                       <pre v-if="generatedContent" style="margin: 0; white-space: pre-wrap; font-family: 'SimSun', 'Songti SC', serif; font-size: 14px; line-height: 1.8; color: #1e293b;">{{ generatedContent }}</pre>
                       <div v-else style="text-align: center; padding: 100px 20px; color: #94a3b8;">
@@ -363,7 +363,7 @@
 
 <script setup>
 
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, nextTick } from 'vue'
 import axios from 'axios'
 import Login from './components/Login.vue'
 
@@ -401,15 +401,11 @@ function onLoginSuccess(user) {
   loadHistory()
 }
 
-onMounted(() => {
-  checkLoginStatus()
-  if (isLoggedIn.value) {
-    loadDocTypes()
-    loadHistory()
-  }
-})
+// 注意：这里原本还有第二个 onMounted，注册在文件下方，导致挂载时
+// loadDocTypes() / loadHistory() 各被调用两遍。已合并为文件末尾的那一个。
 
 const isLoading = ref(false)
+const resultScrollbar = ref(null)
 
 const activeTab = ref('generate')
 const showDetail = ref(false)
@@ -491,13 +487,22 @@ function filterRecords() {
 }
 
 onMounted(async () => {
+  checkLoginStatus()
+  // 文书类型接口是公开的，游客也要能拿到
   await loadDocTypes()
-  await loadHistory()
+  // 历史记录接口需要登录，游客不发请求（原来会拿到一个 401）
+  if (isLoggedIn.value) {
+    await loadHistory()
+  }
 })
 
 async function loadDocTypes() {
   try {
-    const response = await axios.get('http://localhost:8000/api/doc-types')
+    // 用相对路径：开发环境由 vite.config.js 的 proxy 转发到 :8000，
+    // 生产环境由 nginx 把 /api 转发给后端容器。
+    // 原来写死的 'http://localhost:8000' 在 Docker 部署下会指向用户自己的
+    // 机器而不是服务器，非本机访问必然失败。
+    const response = await axios.get('/api/doc-types')
     docTypes.value = response.data
     if (docTypes.value.length > 0) {
       selectedDocType.value = docTypes.value[0].name
@@ -513,23 +518,74 @@ async function generateDoc() {
     errorMsg.value = '请先选择文书类型'
     return
   }
-  
+
   isLoading.value = true
+  generatedContent.value = ''  // 清空旧内容，准备流式追加
+  errorMsg.value = ''
+
   try {
-    errorMsg.value = ''
-    const response = await axios.post('http://localhost:8000/api/generate', {
-      doc_type: selectedDocType.value,
-      fields: formData.value
+    const token = localStorage.getItem('token')
+    // 使用 fetch 而非 axios，因为 axios 对 SSE 流式响应支持不好
+    const response = await fetch('/api/generate/stream', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': token ? `Bearer ${token}` : ''
+      },
+      body: JSON.stringify({
+        doc_type: selectedDocType.value,
+        fields: formData.value
+      })
     })
-    if (response.data.success) {
-      generatedContent.value = response.data.content
-      await loadHistory()
-    } else {
-      errorMsg.value = '生成失败: ' + response.data.message
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`)
+    }
+
+    // 获取 ReadableStream 读取器，逐块读取 SSE 数据
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''  // 缓存不完整的行
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      // 将二进制块解码为文本，追加到缓冲区
+      buffer += decoder.decode(value, { stream: true })
+      // 按换行分割，最后一段可能不完整，留在 buffer 中
+      const lines = buffer.split('\n')
+      buffer = lines.pop()
+
+      for (const line of lines) {
+        // SSE 数据行以 "data: " 开头
+        if (line.startsWith('data: ')) {
+          const dataStr = line.slice(6)
+          try {
+            const event = JSON.parse(dataStr)
+            if (event.type === 'content') {
+              // 逐字追加内容
+              generatedContent.value += event.text
+              // 自动滚动到底部
+              await nextTick()
+              if (resultScrollbar.value) {
+                resultScrollbar.value.scrollTo({ top: 999999 })
+              }
+            } else if (event.type === 'done') {
+              // 生成完成，刷新历史记录
+              await loadHistory()
+            } else if (event.type === 'error') {
+              errorMsg.value = '生成失败: ' + event.message
+            }
+          } catch (e) {
+            // 非 JSON 数据，忽略
+          }
+        }
+      }
     }
   } catch (error) {
     console.error('生成失败:', error)
-    errorMsg.value = '生成失败，请检查网络'
+    errorMsg.value = '生成失败，请检查网络连接或 Ollama 服务'
   } finally {
     isLoading.value = false
   }
@@ -555,12 +611,23 @@ function downloadDoc(docType, content) {
 }
 
 async function loadHistory() {
+  // 后端已收紧为「必须登录」，游客不发这个请求
+  if (!localStorage.getItem('token')) {
+    historyRecords.value = []
+    return
+  }
+
   try {
-    const response = await axios.get('http://localhost:8000/api/history?limit=50')
+    const response = await axios.get('/api/history?limit=50')
     if (response.data.success) {
       historyRecords.value = response.data.records
     }
   } catch (error) {
+    if (error.response?.status === 401) {
+      // 令牌过期或被吊销：清掉本地登录态，让用户重新登录
+      logout()
+      return
+    }
     console.error('获取历史记录失败:', error)
   }
 }
@@ -579,7 +646,7 @@ async function deleteRecord(recordId) {
   }
   
   try {
-    const response = await axios.delete(`http://localhost:8000/api/history/${recordId}`)
+    const response = await axios.delete(`/api/history/${recordId}`)
     if (response.data.success) {
       // 删除成功，刷新列表
       await loadHistory()

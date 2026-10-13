@@ -64,24 +64,6 @@ def save_generated_record(doc_type: str, input_fields: dict, generated_content: 
         print(f"保存记录失败: {e}")
         return False
 
-def delete_record(record_id: int):
-    """删除指定记录"""
-    conn = get_db_connection()
-    if not conn:
-        return False
-    
-    try:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM generated_records WHERE id = %s", (record_id,))
-        conn.commit()
-        affected = cursor.rowcount
-        cursor.close()
-        conn.close()
-        return affected > 0
-    except mysql.connector.Error as e:
-        print(f"删除记录失败: {e}")
-        return False
-
 def delete_record_by_user(record_id: int, user_id: int):
     """删除指定用户的记录（仅允许删除自己的）"""
     conn = get_db_connection()
@@ -224,29 +206,7 @@ def get_history_by_user(user_id: int, limit: int = 50):
         print(f"查询历史记录失败: {e}")
         return []
 
-def get_all_history(limit: int = 50):
-    """获取所有历史记录（用于未登录用户）"""
-    conn = get_db_connection()
-    if not conn:
-        return []
-    
-    try:
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("""
-            SELECT id, doc_type, input_fields, generated_content, created_at 
-            FROM generated_records 
-            ORDER BY created_at DESC 
-            LIMIT %s
-        """, (limit,))
-        records = cursor.fetchall()
-        cursor.close()
-        conn.close()
-        
-        for record in records:
-            if record['created_at']:
-                record['created_at'] = record['created_at'].strftime('%Y-%m-%d %H:%M:%S')
-        
-        return records
-    except mysql.connector.Error as e:
-        print(f"查询历史记录失败: {e}")
-        return []
+# 说明：原本这里还有一个 get_all_history()，直接「SELECT ... FROM generated_records
+# ORDER BY created_at DESC」不带任何用户条件，供未登录用户调用。它会返回全库所有
+# 用户的法律文书，属于越权访问，因此连同 delete_record() 一并删除。
+# 历史记录一律通过 get_history_by_user(user_id, ...) 按归属读取。

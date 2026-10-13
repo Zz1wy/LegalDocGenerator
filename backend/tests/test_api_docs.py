@@ -125,12 +125,19 @@ class TestDocumentGeneration:
     # ── 边界值测试 ──
 
     def test_generate_empty_doc_type(self, client, auth_headers):
-        """🔲 空文书类型"""
+        """
+        🔲 空文书类型应被请求校验直接拒绝（422），而不是 500。
+
+        以前 doc_type 没有任何约束，空字符串会一路走到 build_prompt，命中
+        templates.get("", ...) 的兜底分支，生成出「请生成一份，包含以下信息」
+        这种没有意义的 Prompt —— 白调一次大模型，还把垃圾内容存进历史记录。
+        现在在入口就用 Pydantic 校验挡掉。
+        """
         response = client.post("/api/generate", json={
             "doc_type": "",
             "fields": {"test": "value"}
         }, headers=auth_headers)
-        assert response.status_code == 200  # 不应 500
+        assert response.status_code == 422  # 请求校验失败，且不是 500
 
     def test_generate_very_long_field(self, client, auth_headers):
         """🔲 超长字段值（5000 字符）"""

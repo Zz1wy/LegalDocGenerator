@@ -170,12 +170,17 @@ class TestKnowledgeBaseAPI:
         data = response.json()
         assert "success" in data
 
-    def test_knowledge_reload(self, client):
-        """✅ 知识库重建"""
-        response = client.post("/api/knowledge/reload")
+    def test_knowledge_reload(self, client, auth_headers):
+        """✅ 知识库重建（需要登录）"""
+        response = client.post("/api/knowledge/reload", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert "success" in data
+
+    def test_knowledge_reload_requires_auth(self, client):
+        """🔒 未登录不能触发知识库重建（该操作会重新向量化整个知识库，开销很大）"""
+        response = client.post("/api/knowledge/reload")
+        assert response.status_code == 401
 
 
 class TestErrorRecovery:
