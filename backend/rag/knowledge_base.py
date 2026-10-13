@@ -14,16 +14,21 @@ RAG 知识库构建模块
 """
 
 import os
-import json
-import httpx
+import shutil
 from pathlib import Path
 
-# ChromaDB 和 LangChain 的导入
+# LangChain 组件导入（带优雅降级：缺依赖时 RAG 自动禁用）
+# - OllamaEmbeddings: LangChain 官方封装的 Ollama 向量化，替代手写的 httpx 调用
+# - Chroma: LangChain 对 ChromaDB 的统一封装，提供 VectorStore 标准接口
 try:
-    import chromadb
-    from chromadb.config import Settings
-except ImportError:
-    chromadb = None
+    from langchain_ollama import OllamaEmbeddings
+    from langchain_community.vectorstores import Chroma
+    LANGCHAIN_AVAILABLE = True
+except ImportError as e:
+    OllamaEmbeddings = None
+    Chroma = None
+    LANGCHAIN_AVAILABLE = False
+    print(f"⚠️ LangChain 组件导入失败: {e}")
 
 try:
     from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -47,46 +52,10 @@ CHUNK_SIZE = 500      # 每块最大字符数
 CHUNK_OVERLAP = 80    # 相邻块之间重叠的字符数（避免语义断裂）
 
 
-# ==================== Ollama Embedding 封装 ====================
-
-class OllamaEmbeddingFunction:
-    """
-    自定义 Embedding 函数，调用 Ollama 的 /api/embeddings 接口
-
-    为什么自定义？ChromaDB 内置的 embedding 函数通常调用 OpenAI API，
-    但我们的 Ollama 是本地免费的，所以需要自己封装。
-    """
-
-    def __init__(self, host: str = OLLAMA_HOST, model: str = EMBEDDING_MODEL):
-        self.host = host
-        self.model = model
-
-    def __call__(self, texts: list[str]) -> list[list[float]]:
-        """接收文本列表，返回向量列表"""
-        embeddings = []
-        for text in texts:
-            try:
-                # 同步调用 Ollama
-                import httpx
-                with httpx.Client(timeout=30.0) as client:
-                    response = client.post(
-                        f"{self.host}/api/embeddings",
-                        json={"model": self.model, "prompt": text}
-                    )
-                    if response.status_code == 200:
-                        embedding = response.json().get("embedding", [])
-                        embeddings.append(embedding)
-                    else:
-                        # 失败时返回零向量（实际生产应做更好的错误处理）
-                        print(f"  ⚠️ Embedding 失败: {response.status_code}")
-                        embeddings.append([0.0] * 768)
-            except Exception as e:
-                print(f"  ⚠️ Embedding 异常: {e}")
-                embeddings.append([0.0] * 768)
-        return embeddings
-
-
 # ==================== 知识库构建 ====================
+# 说明：原手写的 OllamaEmbeddingFunction 已被 LangChain 的 OllamaEmbeddings 替代。
+# OllamaEmbeddings 内部已封装 /api/embeddings 调用、批量处理、错误处理等逻辑，
+# 使用方式：embeddings = OllamaEmbeddings(model=..., base_url=...)
 
 def load_legal_documents(data_dir: Path = LEGAL_DATA_DIR) -> list[dict]:
     """
@@ -156,81 +125,75 @@ def chunk_documents(documents: list[dict]) -> list[dict]:
 
 def build_knowledge_base(force_rebuild: bool = False) -> tuple[bool, int]:
     """
-    构建/重建法律知识库
+    构建/重建法律知识库（基于 LangChain Chroma + OllamaEmbeddings）
 
-    流程: 加载文档 → 切块 → 向量化 → 存入 ChromaDB
+    流程: 加载文档 → 切块 → 向量化(OllamaEmbeddings) → 存入 Chroma(VectorStore)
 
-    参数:
-        force_rebuild: 是否强制重建（即使已有数据）
-
-    返回: (是否成功, 总块数)
+    LangChain 封装的优势：
+    - OllamaEmbeddings 自动处理批量向量化和错误重试
+    - Chroma 提供统一 VectorStore 接口，后续可无缝切换其他向量库（FAISS/Qdrant）
+    - 后续可直接 .as_retriever() 获得检索器，无需手写查询逻辑
     """
-    if chromadb is None:
-        print("❌ ChromaDB 未安装，请运行: pip install chromadb")
+    if not LANGCHAIN_AVAILABLE:
+        print("❌ LangChain 未安装，请运行: pip install langchain langchain-community langchain-ollama")
         return False, 0
 
     # 检查是否可以跳过
     if not force_rebuild and CHROMA_DB_DIR.exists() and any(CHROMA_DB_DIR.iterdir()):
         print("✅ 知识库已存在，跳过构建（如需重建请设置 force_rebuild=True）")
-        # 快速统计已有数据
-        client = chromadb.PersistentClient(path=str(CHROMA_DB_DIR))
         try:
-            collection = client.get_collection("legal_knowledge")
-            count = collection.count()
+            embeddings = OllamaEmbeddings(model=EMBEDDING_MODEL, base_url=OLLAMA_HOST)
+            vs = Chroma(
+                collection_name="legal_knowledge",
+                embedding_function=embeddings,
+                persist_directory=str(CHROMA_DB_DIR)
+            )
+            count = len(vs.get()["ids"])
             return True, count
-        except:
+        except Exception:
             pass
 
     print("\n🔨 开始构建法律知识库...\n")
 
     # 1. 加载文档
-    print("📂 Step 1/4: 加载法律文档...")
+    print("📂 Step 1/3: 加载法律文档...")
     documents = load_legal_documents()
     if not documents:
         print("❌ 没有找到法律文档")
         return False, 0
 
     # 2. 切块
-    print(f"\n✂️  Step 2/4: 文本切块（{CHUNK_SIZE}字/块，重叠{CHUNK_OVERLAP}字）...")
+    print(f"\n✂️  Step 2/3: 文本切块（{CHUNK_SIZE}字/块，重叠{CHUNK_OVERLAP}字）...")
     chunks = chunk_documents(documents)
     print(f"  总计: {len(chunks)} 个文本块")
 
-    # 3. 初始化 ChromaDB
-    print("\n🗄️  Step 3/4: 初始化向量数据库...")
-    client = chromadb.PersistentClient(path=str(CHROMA_DB_DIR))
+    # 3. 用 LangChain Chroma + OllamaEmbeddings 向量化并存储
+    print(f"\n🧮 Step 3/3: 向量化并存储（LangChain OllamaEmbeddings + {EMBEDDING_MODEL}）...")
 
-    # 如果已存在同名 collection，先删除再重建
-    try:
-        client.delete_collection("legal_knowledge")
-    except:
-        pass
+    # 强制重建时删除旧数据目录（LangChain Chroma 没有直接的删集合方法）
+    if force_rebuild and CHROMA_DB_DIR.exists():
+        shutil.rmtree(CHROMA_DB_DIR, ignore_errors=True)
 
-    collection = client.create_collection(
-        name="legal_knowledge",
-        metadata={"description": "中国法律法规知识库"}
+    # OllamaEmbeddings：封装了对 Ollama /api/embeddings 的调用
+    embeddings = OllamaEmbeddings(model=EMBEDDING_MODEL, base_url=OLLAMA_HOST)
+    # Chroma VectorStore：传入 embedding_function，add_texts 时自动向量化
+    vectorstore = Chroma(
+        collection_name="legal_knowledge",
+        embedding_function=embeddings,
+        persist_directory=str(CHROMA_DB_DIR)
     )
 
-    # 4. 向量化并存入
-    print(f"\n🧮 Step 4/4: 向量化并存储（使用 {EMBEDDING_MODEL}）...")
-    embed_fn = OllamaEmbeddingFunction()
+    texts = [c["text"] for c in chunks]
+    ids = [c["id"] for c in chunks]
+    metadatas = [{"title": c["title"], "source": c["source"], "chunk_index": c["chunk_index"]} for c in chunks]
 
-    # 分批处理（避免一次发送太多文本）
+    # 分批存入（LangChain 内部自动调用 Ollama 生成向量）
     batch_size = 10
     for i in range(0, len(chunks), batch_size):
-        batch = chunks[i:i + batch_size]
-        texts = [c["text"] for c in batch]
-        ids = [c["id"] for c in batch]
-        metadatas = [{"title": c["title"], "source": c["source"], "chunk_index": c["chunk_index"]} for c in batch]
-
-        # 生成向量
-        embeddings = embed_fn(texts)
-
-        # 存入 ChromaDB
-        collection.add(
-            ids=ids,
-            documents=texts,
-            embeddings=embeddings,
-            metadatas=metadatas
+        vectorstore.add_texts(
+            texts=texts[i:i + batch_size],
+            metadatas=metadatas[i:i + batch_size],
+            ids=ids[i:i + batch_size]
         )
         print(f"  💾 已存储 {min(i + batch_size, len(chunks))}/{len(chunks)} 块")
 
@@ -239,16 +202,22 @@ def build_knowledge_base(force_rebuild: bool = False) -> tuple[bool, int]:
 
 
 def get_knowledge_base_stats() -> dict:
-    """获取知识库统计信息"""
-    if chromadb is None or not CHROMA_DB_DIR.exists():
+    """获取知识库统计信息（基于 LangChain Chroma 接口）"""
+    if not LANGCHAIN_AVAILABLE or not CHROMA_DB_DIR.exists():
         return {"status": "not_built", "total_chunks": 0}
 
     try:
-        client = chromadb.PersistentClient(path=str(CHROMA_DB_DIR))
-        collection = client.get_collection("legal_knowledge")
+        embeddings = OllamaEmbeddings(model=EMBEDDING_MODEL, base_url=OLLAMA_HOST)
+        vs = Chroma(
+            collection_name="legal_knowledge",
+            embedding_function=embeddings,
+            persist_directory=str(CHROMA_DB_DIR)
+        )
+        # get() 返回所有文档，ids 列表长度即为总块数
+        count = len(vs.get()["ids"])
         return {
             "status": "ready",
-            "total_chunks": collection.count(),
+            "total_chunks": count,
             "storage_path": str(CHROMA_DB_DIR)
         }
     except Exception as e:

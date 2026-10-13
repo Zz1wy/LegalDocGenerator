@@ -14,12 +14,17 @@ RAG 检索模块
 import os
 from pathlib import Path
 
+# LangChain 组件导入
 try:
-    import chromadb
+    from langchain_ollama import OllamaEmbeddings
+    from langchain_community.vectorstores import Chroma
+    LANGCHAIN_AVAILABLE = True
 except ImportError:
-    chromadb = None
+    OllamaEmbeddings = None
+    Chroma = None
+    LANGCHAIN_AVAILABLE = False
 
-from .knowledge_base import CHROMA_DB_DIR, OllamaEmbeddingFunction, EMBEDDING_MODEL, OLLAMA_HOST
+from .knowledge_base import CHROMA_DB_DIR, EMBEDDING_MODEL, OLLAMA_HOST
 
 # 检索参数
 TOP_K = 5  # 返回最相似的前 K 条
@@ -129,36 +134,28 @@ def retrieve(doc_type: str, fields: dict, top_k: int = TOP_K) -> dict:
         "combined": ""
     }
 
-    # 1. 语义检索（从向量库中找相似内容）
-    if chromadb and CHROMA_DB_DIR.exists():
+    # 1. 语义检索（用 LangChain Retriever 从向量库找相似内容）
+    # as_retriever() 一行完成：查询向量化 → 相似度排序 → 返回 Top-K 个 Document
+    if LANGCHAIN_AVAILABLE and CHROMA_DB_DIR.exists():
         try:
             query = build_query(doc_type, fields)
-            client = chromadb.PersistentClient(path=str(CHROMA_DB_DIR))
-            collection = client.get_collection("legal_knowledge")
-
-            # 生成查询向量
-            embed_fn = OllamaEmbeddingFunction()
-            query_embedding = embed_fn([query])[0]
-
-            # 向量检索
-            search_results = collection.query(
-                query_embeddings=[query_embedding],
-                n_results=top_k
+            embeddings = OllamaEmbeddings(model=EMBEDDING_MODEL, base_url=OLLAMA_HOST)
+            vectorstore = Chroma(
+                collection_name="legal_knowledge",
+                embedding_function=embeddings,
+                persist_directory=str(CHROMA_DB_DIR)
             )
+            # search_kwargs={"k": top_k} 指定返回前 K 个结果
+            retriever = vectorstore.as_retriever(search_kwargs={"k": top_k})
+            docs = retriever.invoke(query)
 
-            # 提取检索到的文本
-            if search_results and search_results.get("documents"):
-                for doc_list in search_results["documents"]:
-                    for doc_text in doc_list:
-                        if doc_text and doc_text not in result["legal_refs"]:
-                            result["legal_refs"].append(doc_text)
+            # docs 是 list[Document]，每个 Document 有 page_content 和 metadata
+            for doc in docs:
+                if doc.page_content and doc.page_content not in result["legal_refs"]:
+                    result["legal_refs"].append(doc.page_content)
 
         except Exception as e:
             print(f"⚠️ 向量检索失败: {e}")
-            # 向量检索失败回退到关键词匹配
-            search_results = None
-    else:
-        search_results = None
 
     # 2. 精确匹配：根据文书类型追加相关法律提示
     doc_keywords = DOC_TYPE_TO_LEGAL_REF.get(doc_type, doc_type)

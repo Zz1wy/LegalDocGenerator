@@ -7,6 +7,11 @@ bcrypt>=4.0.1
 httpx>=0.28.1
 python-dotenv>=1.2.2
 pydantic>=2.13.4
-# RAG 相关依赖
+# RAG dependencies
 chromadb>=0.4.0
 langchain-text-splitters>=0.2.0
+# LangChain framework: unified Embedding/VectorStore/Retriever/Prompt components
+langchain>=0.3.0
+langchain-core>=0.3.0
+langchain-community>=0.3.0
+langchain-ollama>=0.2.0
