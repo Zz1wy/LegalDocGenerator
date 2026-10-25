@@ -7,7 +7,7 @@ PyJWT==2.15.1
 passlib[bcrypt]>=1.7.4
 # passlib 1.7.4 与 bcrypt 5.x 不兼容：bcrypt 5 会拒绝 passlib 内部用于探测后端的
 # 超长密码，导致所有注册/登录在初始化哈希器时抛 ValueError。必须限制在 4.x。
-bcrypt>=4.0.1,<5.0
+bcrypt>=5.0.0,<6.0
 httpx>=0.28.1
 python-dotenv>=1.2.2
 pydantic>=2.13.4
