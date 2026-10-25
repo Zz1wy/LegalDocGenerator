@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-fastapi>=0.137.0
+fastapi>=0.159.1
 uvicorn>=0.49.0
 mysql-connector-python>=9.7.0
 # PyJWT 仍在维护；python-jose 3.5.0 目前有未修复的算法混淆 advisory。
