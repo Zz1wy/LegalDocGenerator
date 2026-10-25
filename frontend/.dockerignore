@@ -5,5 +5,5 @@ dist/
 .vscode/
 .idea/
 *.md
-.env
-.env.local
+# 排除所有 .env 变体，避免把本地配置带进构建上下文。
+.env*

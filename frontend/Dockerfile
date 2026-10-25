@@ -7,8 +7,9 @@ WORKDIR /app
 # 先复制依赖文件（利用 Docker 缓存）
 COPY package.json package-lock.json* ./
 
-# 安装依赖（使用国内镜像加速）
-RUN npm install
+# 按 package-lock.json 精确安装，保证构建可复现
+# （npm install 可能悄悄升级依赖，导致「本地能跑、镜像里挂」）
+RUN npm ci
 
 # 复制源码并构建
 COPY . .

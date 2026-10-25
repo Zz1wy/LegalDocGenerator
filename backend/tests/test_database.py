@@ -65,8 +65,9 @@ class TestSaveRecord:
 
     @patch("database.get_db_connection")
     def test_save_success(self, mock_conn):
-        """✅ 成功保存"""
+        """✅ 成功保存：返回新记录 id"""
         mock_cursor = MagicMock()
+        mock_cursor.lastrowid = 42
         mock_conn_instance = MagicMock()
         mock_conn_instance.cursor.return_value = mock_cursor
         mock_conn.return_value = mock_conn_instance
@@ -78,12 +79,13 @@ class TestSaveRecord:
             "生成的文书内容",
             user_id=1
         )
-        assert result is True
+        assert result == 42
 
     @patch("database.get_db_connection")
     def test_save_with_none_user(self, mock_conn):
         """✅ 未登录用户（user_id=None）保存"""
         mock_cursor = MagicMock()
+        mock_cursor.lastrowid = 7
         mock_conn_instance = MagicMock()
         mock_conn_instance.cursor.return_value = mock_cursor
         mock_conn.return_value = mock_conn_instance
@@ -95,12 +97,13 @@ class TestSaveRecord:
             "生成内容",
             user_id=None
         )
-        assert result is True
+        assert result == 7
 
     @patch("database.get_db_connection")
     def test_save_long_content(self, mock_conn):
         """🔲 超长内容（10000 字符）"""
         mock_cursor = MagicMock()
+        mock_cursor.lastrowid = 99
         mock_conn_instance = MagicMock()
         mock_conn_instance.cursor.return_value = mock_cursor
         mock_conn.return_value = mock_conn_instance
@@ -112,7 +115,34 @@ class TestSaveRecord:
             "A" * 10000,
             user_id=1
         )
-        assert result is True
+        assert result == 99
+
+    @patch("database.get_db_connection")
+    def test_update_record_own(self, mock_conn):
+        """✅ 更新自己的记录：SQL 命中 1 行"""
+        mock_cursor = MagicMock()
+        mock_cursor.rowcount = 1
+        mock_conn_instance = MagicMock()
+        mock_conn_instance.cursor.return_value = mock_cursor
+        mock_conn.return_value = mock_conn_instance
+
+        from database import update_record_content_by_user
+        assert update_record_content_by_user(1, 1, "新内容") is True
+        sql, params = mock_cursor.execute.call_args[0]
+        assert "user_id = %s" in sql
+        assert params == ("新内容", 1, 1)
+
+    @patch("database.get_db_connection")
+    def test_update_record_not_owned(self, mock_conn):
+        """🔒 更新别人的记录：WHERE 不命中，返回 False"""
+        mock_cursor = MagicMock()
+        mock_cursor.rowcount = 0
+        mock_conn_instance = MagicMock()
+        mock_conn_instance.cursor.return_value = mock_cursor
+        mock_conn.return_value = mock_conn_instance
+
+        from database import update_record_content_by_user
+        assert update_record_content_by_user(1, 999, "越权修改") is False
 
     @patch("database.save_generated_record_with_user")
     def test_save_connection_failure(self, mock_save):

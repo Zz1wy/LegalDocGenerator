@@ -9,9 +9,8 @@ __pycache__/
 *.pyo
 
 # 敏感文件（用 docker-compose 的环境变量注入）
-.env
-.env.local
-.env.prod
+# 排除所有 .env 变体；镜像内不需要示例模板。
+.env*
 
 # Git
 .git/

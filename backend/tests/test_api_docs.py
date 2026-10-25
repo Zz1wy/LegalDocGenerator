@@ -112,15 +112,62 @@ class TestDocumentGeneration:
         data = response.json()
         assert data["success"] is True
 
-    def test_generate_saves_to_database(self, client, auth_headers, mock_database):
-        """✅ 生成后应保存到数据库"""
+    def test_generate_error_does_not_leak_internal_details(self, client, monkeypatch):
+        """❌ 内部异常不应把 Ollama 地址/堆栈原样返回给客户端"""
+        async def boom(doc_type, fields):
+            raise RuntimeError("internal-secret OLLAMA_HOST=http://10.0.0.5:11434")
+
+        monkeypatch.setattr("main.generate_with_ai", boom)
+        response = client.post("/api/generate", json={
+            "doc_type": "借条",
+            "fields": {"lender": "张三", "borrower": "李四", "amount": "10000"}
+        })
+        assert response.status_code == 200
+        assert "internal-secret" not in response.text
+        assert "10.0.0.5" not in response.text
+        assert response.json()["success"] is False
+        assert response.json()["message"] == "生成失败，请稍后重试"
+
+    def test_generate_saves_to_database(self, client, auth_headers, mock_cursor):
+        """✅ 生成后应保存到数据库，并把记录 id 返回给前端"""
         response = client.post("/api/generate", json={
             "doc_type": "劳动合同",
             "fields": {"party_a": "测试公司"}
         }, headers=auth_headers)
         assert response.status_code == 200
-        # 验证 save_generated_record_with_user 被调用
-        mock_database["save_record"].assert_called()
+        # 前端需要 record_id 才能对结果做「在线编辑 → 保存」
+        assert response.json()["record_id"] == 1
+        # 确认真的执行了 INSERT（而不是只把 id 编出来）
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "INSERT INTO generated_records" in sql
+
+    def test_generate_stream_done_event_contains_record_id(
+        self, client, auth_headers, mock_cursor, monkeypatch
+    ):
+        """✅ SSE 流式生成：done 事件应带回 record_id"""
+        import main
+
+        async def fake_stream(prompt):
+            yield "甲方："
+            yield "测试公司"
+
+        monkeypatch.setattr(main, "stream_ollama", fake_stream)
+
+        with client.stream(
+            "POST",
+            "/api/generate/stream",
+            json={"doc_type": "劳动合同", "fields": {"party_a": "测试公司"}},
+            headers=auth_headers,
+        ) as response:
+            assert response.status_code == 200
+            body = "".join(response.iter_text())
+
+        assert '"type": "content"' in body
+        assert "测试公司" in body
+        assert '"type": "done"' in body
+        assert '"record_id": 1' in body
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "INSERT INTO generated_records" in sql
 
     # ── 边界值测试 ──
 

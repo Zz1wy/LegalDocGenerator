@@ -74,6 +74,123 @@ class TestCheckRateLimit:
         assert retry_after >= 1
 
 
+class _FakeRequest:
+    """只实现 get_client_ip 用到的两个属性，避免构造完整的 ASGI scope"""
+
+    def __init__(self, peer: str, forwarded_for: str | None = None):
+        self.client = type("Client", (), {"host": peer})()
+        self.headers = {}
+        if forwarded_for is not None:
+            self.headers["x-forwarded-for"] = forwarded_for
+
+
+class TestClientIpResolution:
+    """
+    反向代理下的真实 IP 解析。
+
+    Docker 部署时所有请求都来自 Nginx 容器，若不解析 X-Forwarded-For，
+    全站用户会共享一个限流桶；但无条件信任该头部又会让客户端可以伪造 IP。
+    """
+
+    def test_xff_ignored_when_proxy_trust_disabled(self, monkeypatch):
+        """未开启代理信任时，X-Forwarded-For 一律忽略"""
+        monkeypatch.setattr(main, "TRUST_PROXY_HEADERS", False)
+        request = _FakeRequest("203.0.113.7", "1.2.3.4")
+        assert main.get_client_ip(request) == "203.0.113.7"
+
+    def test_xff_used_from_trusted_proxy(self, monkeypatch):
+        """对端是可信代理时，取 X-Forwarded-For 中的真实客户端 IP"""
+        monkeypatch.setattr(main, "TRUST_PROXY_HEADERS", True)
+        monkeypatch.setattr(
+            main, "TRUSTED_PROXY_NETWORKS",
+            main._parse_trusted_networks("172.16.0.0/12"),
+        )
+        request = _FakeRequest("172.18.0.2", "198.51.100.23")
+        assert main.get_client_ip(request) == "198.51.100.23"
+
+    def test_xff_ignored_from_untrusted_peer(self, monkeypatch):
+        """对端不可信：即使带了 X-Forwarded-For 也不能采信（防伪造）"""
+        monkeypatch.setattr(main, "TRUST_PROXY_HEADERS", True)
+        monkeypatch.setattr(
+            main, "TRUSTED_PROXY_NETWORKS",
+            main._parse_trusted_networks("172.16.0.0/12"),
+        )
+        request = _FakeRequest("203.0.113.7", "1.2.3.4")
+        assert main.get_client_ip(request) == "203.0.113.7"
+
+    def test_spoofed_leftmost_entry_is_ignored(self, monkeypatch):
+        """
+        客户端可以自己塞一个 X-Forwarded-For，Nginx 会把真实地址追加在右边：
+            6.6.6.6, 198.51.100.23
+        从右往左找第一个不可信地址，得到真实 IP，而不是伪造的 6.6.6.6。
+        """
+        monkeypatch.setattr(main, "TRUST_PROXY_HEADERS", True)
+        monkeypatch.setattr(
+            main, "TRUSTED_PROXY_NETWORKS",
+            main._parse_trusted_networks("172.16.0.0/12"),
+        )
+        request = _FakeRequest("172.18.0.2", "6.6.6.6, 198.51.100.23")
+        assert main.get_client_ip(request) == "198.51.100.23"
+
+    def test_private_client_ip_is_not_mistaken_for_proxy(self, monkeypatch):
+        """
+        真实客户端是私网地址（企业内网常见）时，不能因为它在可信网段里就被
+        跳过 —— 否则伪造的左侧条目会生效。只取 Nginx 追加的最右一项。
+        """
+        monkeypatch.setattr(main, "TRUST_PROXY_HEADERS", True)
+        monkeypatch.setattr(
+            main, "TRUSTED_PROXY_NETWORKS",
+            main._parse_trusted_networks("172.16.0.0/12,192.168.0.0/16"),
+        )
+        request = _FakeRequest("172.18.0.2", "6.6.6.6, 192.168.1.50")
+        assert main.get_client_ip(request) == "192.168.1.50"
+
+    def test_rightmost_entry_is_used_for_multi_hop(self, monkeypatch):
+        """多级代理时也只取最右一项（由直连代理追加）"""
+        monkeypatch.setattr(main, "TRUST_PROXY_HEADERS", True)
+        monkeypatch.setattr(
+            main, "TRUSTED_PROXY_NETWORKS",
+            main._parse_trusted_networks("172.16.0.0/12"),
+        )
+        request = _FakeRequest("172.18.0.2", "172.18.0.3, 172.18.0.4")
+        assert main.get_client_ip(request) == "172.18.0.4"
+
+    def test_garbage_xff_is_skipped(self, monkeypatch):
+        """XFF 里混入非法地址时，只取最右的合法值"""
+        monkeypatch.setattr(main, "TRUST_PROXY_HEADERS", True)
+        monkeypatch.setattr(
+            main, "TRUSTED_PROXY_NETWORKS",
+            main._parse_trusted_networks("172.16.0.0/12"),
+        )
+        request = _FakeRequest("172.18.0.2", "not-an-ip, 198.51.100.23")
+        assert main.get_client_ip(request) == "198.51.100.23"
+
+    def test_invalid_rightmost_falls_back_to_peer(self, monkeypatch):
+        """最右一项非法时退回对端地址，不能拿垃圾字符串当 key"""
+        monkeypatch.setattr(main, "TRUST_PROXY_HEADERS", True)
+        monkeypatch.setattr(
+            main, "TRUSTED_PROXY_NETWORKS",
+            main._parse_trusted_networks("172.16.0.0/12"),
+        )
+        request = _FakeRequest("172.18.0.2", "198.51.100.23, not-an-ip")
+        assert main.get_client_ip(request) == "172.18.0.2"
+
+
+class TestBucketPruning:
+    """限流计数器不能无限增长（否则是内存泄漏）"""
+
+    def test_prune_removes_expired_buckets(self):
+        max_window = max(window for _, window in RATE_LIMIT_RULES.values())
+        main._rate_buckets[("1.1.1.1", "/api/login")] = [0.0, 1]
+        main._rate_buckets[("2.2.2.2", "/api/login")] = [max_window + 10.0, 1]
+
+        removed = main.prune_rate_buckets(max_window + 20.0)
+
+        assert removed == 1
+        assert ("1.1.1.1", "/api/login") not in main._rate_buckets
+        assert ("2.2.2.2", "/api/login") in main._rate_buckets
+
+
 class TestRateLimitMiddleware:
     """端到端：真的发请求，看是否返回 429"""
 

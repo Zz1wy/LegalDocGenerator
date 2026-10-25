@@ -11,7 +11,7 @@ db_pool = pooling.MySQLConnectionPool(
     pool_size=5,
     host=os.getenv("DB_HOST", "localhost"),
     port=int(os.getenv("DB_PORT", 3306)),
-    user=os.getenv("DB_USER", "root"),
+    user=os.getenv("DB_USER", "legal_app"),
     password=os.getenv("DB_PASSWORD", ""),
     database=os.getenv("DB_NAME", "legal_doc_db")
 )
@@ -157,25 +157,60 @@ def get_user_by_id(user_id: int):
         return None
 
 def save_generated_record_with_user(doc_type: str, input_fields: dict, generated_content: str, user_id: int = None):
-    """保存生成记录（带用户ID）"""
+    """
+    保存生成记录（带用户ID）
+
+    返回新记录的 id（成功）或 None（失败）。前端需要这个 id 才能对刚生成的
+    文书做「在线编辑 → 保存」，所以这里不再只返回 True/False。
+    """
     conn = get_db_connection()
     if not conn:
-        return False
-    
+        return None
+
     try:
         cursor = conn.cursor()
         sql = """
-            INSERT INTO generated_records (doc_type, input_fields, generated_content, user_id) 
+            INSERT INTO generated_records (doc_type, input_fields, generated_content, user_id)
             VALUES (%s, %s, %s, %s)
         """
         import json
         cursor.execute(sql, (doc_type, json.dumps(input_fields), generated_content, user_id))
         conn.commit()
+        record_id = cursor.lastrowid
         cursor.close()
         conn.close()
-        return True
+        return record_id
     except mysql.connector.Error as e:
         print(f"保存记录失败: {e}")
+        return None
+
+
+def update_record_content_by_user(record_id: int, user_id: int, generated_content: str) -> bool:
+    """
+    更新指定用户的文书内容（在线编辑后保存）。
+
+    和删除一样，WHERE 同时带 id 和 user_id：改别人的记录会命中 0 行，
+    返回值和「记录不存在」一致，不泄露记录是否存在。
+    """
+    conn = get_db_connection()
+    if not conn:
+        return False
+
+    try:
+        cursor = conn.cursor()
+        sql = """
+            UPDATE generated_records
+            SET generated_content = %s
+            WHERE id = %s AND user_id = %s
+        """
+        cursor.execute(sql, (generated_content, record_id, user_id))
+        conn.commit()
+        affected = cursor.rowcount
+        cursor.close()
+        conn.close()
+        return affected > 0
+    except mysql.connector.Error as e:
+        print(f"更新记录失败: {e}")
         return False
 
 def get_history_by_user(user_id: int, limit: int = 50):

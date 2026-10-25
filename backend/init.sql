@@ -1,5 +1,11 @@
 -- ===== 法律文书系统 数据库初始化脚本 =====
--- MySQL 容器首次启动时会自动执行此文件
+-- MySQL 容器首次启动时会自动执行此文件。
+--
+-- 应用账号不在本脚本中创建（避免把密码写进 SQL）：
+--   Docker: 由 MySQL 官方镜像根据 MYSQL_USER / MYSQL_PASSWORD 创建并授权。
+--   本地:   请手动创建 legal_app 账号，仅授予本数据库权限，不要用 root 运行后端。
+--
+-- 注意：已有 mysql_data 数据卷时，入口脚本不会再次创建用户；需要手动迁移或重建卷。
 
 CREATE TABLE IF NOT EXISTS users (
     id INT AUTO_INCREMENT PRIMARY KEY,

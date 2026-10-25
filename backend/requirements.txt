@@ -1,14 +1,17 @@
 fastapi>=0.137.0
 uvicorn>=0.49.0
 mysql-connector-python>=9.7.0
-python-jose[cryptography]>=3.5.0
+# PyJWT 仍在维护；python-jose 3.5.0 目前有未修复的算法混淆 advisory。
+PyJWT==2.15.1
 passlib[bcrypt]>=1.7.4
 bcrypt>=4.0.1
 httpx>=0.28.1
 python-dotenv>=1.2.2
 pydantic>=2.13.4
 # RAG dependencies
-chromadb>=0.4.0
+# 1.5.9 是当前最新版本；OSV 仍报告若干服务端/多租户相关 advisory。
+# 本项目只使用本地 PersistentClient，不启动 Chroma HTTP 服务，也不暴露其端口。
+chromadb==1.5.9
 langchain-text-splitters>=0.2.0
 # LangChain framework: unified Embedding/VectorStore/Retriever/Prompt components
 langchain>=0.3.0

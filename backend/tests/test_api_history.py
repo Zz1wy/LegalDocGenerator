@@ -115,3 +115,64 @@ class TestHistoryDeletion:
         """🔲 非法 ID（负数）"""
         response = client.delete("/api/history/-1", headers=auth_headers)
         assert response.status_code == 200  # 不应 500
+
+
+class TestHistoryUpdate:
+    """在线编辑后保存（PUT /api/history/{id}）"""
+
+    def test_update_own_record(self, client, auth_headers, mock_cursor):
+        """✅ 保存自己的文书修改"""
+        response = client.put(
+            "/api/history/1",
+            json={"content": "修改后的文书内容"},
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        # 校验归属条件确实写进了 SQL，参数顺序为 (content, record_id, user_id)
+        sql, params = mock_cursor.execute.call_args[0]
+        assert "user_id = %s" in sql
+        assert params == ("修改后的文书内容", 1, 1)
+
+    def test_update_unauthenticated(self, client):
+        """🔒 未登录不能修改任何记录"""
+        response = client.put("/api/history/1", json={"content": "x"})
+        assert response.status_code == 401
+
+    def test_update_others_record_is_rejected(self, client, auth_headers, mock_cursor):
+        """🔒 修改别人的记录：命中 0 行，返回失败但不泄露记录是否存在"""
+        mock_cursor.rowcount = 0
+        response = client.put(
+            "/api/history/1",
+            json={"content": "越权修改"},
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+        assert response.json()["success"] is False
+
+    def test_update_empty_content_rejected(self, client, auth_headers):
+        """❌ 空内容应被请求校验拒绝（422），不能把记录清空"""
+        response = client.put(
+            "/api/history/1", json={"content": ""}, headers=auth_headers
+        )
+        assert response.status_code == 422
+
+    def test_update_oversized_content_rejected(self, client, auth_headers):
+        """❌ 超过 200000 字的内容应被拒绝，避免撑爆数据库"""
+        response = client.put(
+            "/api/history/1",
+            json={"content": "A" * 200_001},
+            headers=auth_headers,
+        )
+        assert response.status_code == 422
+
+    def test_update_nonexistent_record(self, client, auth_headers, mock_cursor):
+        """🔲 不存在的记录：正常返回失败，而不是 500"""
+        mock_cursor.rowcount = 0
+        response = client.put(
+            "/api/history/99999",
+            json={"content": "内容"},
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+        assert response.json()["success"] is False

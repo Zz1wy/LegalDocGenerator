@@ -204,20 +204,48 @@
               <el-col :span="16">
                 <el-card>
                   <template #header>
-                    <span style="font-weight: 600;">📄 生成结果</span>
+                    <div style="display: flex; align-items: center; justify-content: space-between;">
+                      <span style="font-weight: 600;">📄 生成结果</span>
+                      <div style="display: flex; gap: 8px;">
+                        <el-button
+                          v-if="!isEditingGenerated"
+                          size="small"
+                          @click="startEditGenerated"
+                          :disabled="!generatedContent"
+                        >✏️ 编辑</el-button>
+                        <template v-else>
+                          <el-button size="small" type="primary" :loading="isSavingEdit" @click="saveGeneratedEdit">💾 保存修改</el-button>
+                          <el-button size="small" @click="cancelGeneratedEdit">取消</el-button>
+                        </template>
+                      </div>
+                    </div>
                   </template>
                   <el-scrollbar ref="resultScrollbar" style="height: 450px; background-color: #fafafa; border-radius: 6px; padding: 15px;">
+                    <el-input
+                      v-if="isEditingGenerated"
+                      v-model="editingContent"
+                      type="textarea"
+                      :rows="18"
+                      resize="none"
+                      placeholder="在此编辑文书内容..."
+                      style="font-family: 'SimSun', 'Songti SC', serif; font-size: 14px; line-height: 1.8;"
+                    />
                     <transition name="fade">
-                      <pre v-if="generatedContent" style="margin: 0; white-space: pre-wrap; font-family: 'SimSun', 'Songti SC', serif; font-size: 14px; line-height: 1.8; color: #1e293b;">{{ generatedContent }}</pre>
-                      <div v-else style="text-align: center; padding: 100px 20px; color: #94a3b8;">
+                      <pre v-if="generatedContent && !isEditingGenerated" style="margin: 0; white-space: pre-wrap; font-family: 'SimSun', 'Songti SC', serif; font-size: 14px; line-height: 1.8; color: #1e293b;">{{ generatedContent }}</pre>
+                      <div v-else-if="!generatedContent" style="text-align: center; padding: 100px 20px; color: #94a3b8;">
                         <div style="font-size: 48px; margin-bottom: 20px;">📝</div>
                         <p style="font-size: 16px;">请选择文书类型并填写信息，然后点击"生成文书"</p>
                       </div>
                     </transition>
                   </el-scrollbar>
-                  <el-button type="success" @click="exportDoc" style="margin-top: 20px;" :disabled="!generatedContent">
-                    📥 导出文档
-                  </el-button>
+                  <div style="margin-top: 20px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                    <el-button type="success" @click="exportDoc" :disabled="!generatedContent">📥 导出 Word</el-button>
+                    <el-button @click="printDoc" :disabled="!generatedContent">🖨️ 打印 / 导出 PDF</el-button>
+                    <el-button @click="copyDoc" :disabled="!generatedContent">📋 复制全文</el-button>
+                    <span v-if="currentRecordId" style="font-size: 12px; color: #64748b; margin-left: auto;">
+                      ✅ 已保存为记录 #{{ currentRecordId }}
+                    </span>
+                  </div>
                 </el-card>
               </el-col>
             </el-row>
@@ -342,18 +370,33 @@
         </el-tabs>
 
         <!-- 详情弹窗 -->
-        <el-dialog 
-          title="📄 文书详情" 
-          v-model="showDetail" 
+        <el-dialog
+          title="📄 文书详情"
+          v-model="showDetail"
           width="800px"
           :close-on-click-modal="false"
+          @close="cancelRecordEdit"
         >
           <el-scrollbar style="height: 450px;">
-            <pre style="white-space: pre-wrap; font-family: 'SimSun', 'Songti SC', serif; font-size: 14px; line-height: 1.8;">{{ selectedRecord?.generated_content }}</pre>
+            <el-input
+              v-if="isEditingRecord"
+              v-model="editingRecordContent"
+              type="textarea"
+              :rows="18"
+              resize="none"
+              style="font-family: 'SimSun', 'Songti SC', serif; font-size: 14px; line-height: 1.8;"
+            />
+            <pre v-else style="white-space: pre-wrap; font-family: 'SimSun', 'Songti SC', serif; font-size: 14px; line-height: 1.8;">{{ selectedRecord?.generated_content }}</pre>
           </el-scrollbar>
           <template #footer>
+            <el-button v-if="!isEditingRecord" @click="startEditRecord(selectedRecord)">✏️ 编辑内容</el-button>
+            <template v-else>
+              <el-button type="primary" :loading="isSavingRecord" @click="saveRecordEdit">💾 保存修改</el-button>
+              <el-button @click="cancelRecordEdit">取消</el-button>
+            </template>
             <el-button @click="showDetail = false">✖️ 关闭</el-button>
-            <el-button type="success" @click="exportRecord(selectedRecord)">📥 导出文档</el-button>
+            <el-button type="success" @click="exportRecord(selectedRecord)">📥 导出 Word</el-button>
+            <el-button @click="printRecord(selectedRecord)">🖨️ 导出 PDF</el-button>
           </template>
         </el-dialog>
       </el-main>
@@ -390,6 +433,16 @@ function logout() {
   isLoggedIn.value = false
   currentUser.value = null
   delete axios.defaults.headers.common['Authorization']
+
+  // 清掉上一会话的内容：同一浏览器切换账号时，不能把前一个用户的
+  // 生成结果和历史记录继续留在页面上。
+  generatedContent.value = ''
+  currentRecordId.value = null
+  historyRecords.value = []
+  isEditingGenerated.value = false
+  editingContent.value = ''
+  isEditingRecord.value = false
+  editingRecordContent.value = ''
 }
 
 // 登录成功处理
@@ -415,6 +468,24 @@ const docTypes = ref([])
 const selectedDocType = ref('')
 const generatedContent = ref('')
 const errorMsg = ref('')
+
+// 当前生成结果对应的历史记录 id（游客 / 保存失败时为 null）
+const currentRecordId = ref(null)
+
+// 生成结果的在线编辑
+const isEditingGenerated = ref(false)
+const editingContent = ref('')
+const isSavingEdit = ref(false)
+
+// 历史记录详情弹窗的在线编辑
+const isEditingRecord = ref(false)
+const editingRecordContent = ref('')
+const isSavingRecord = ref(false)
+
+// 导出/复制时优先使用编辑框里的内容（用户可能还没点保存）
+const effectiveContent = computed(() =>
+  isEditingGenerated.value ? editingContent.value : generatedContent.value
+)
 
 const formData = ref({
   party_a: '', party_b: '', term: '', salary: '',
@@ -521,6 +592,9 @@ async function generateDoc() {
 
   isLoading.value = true
   generatedContent.value = ''  // 清空旧内容，准备流式追加
+  currentRecordId.value = null
+  isEditingGenerated.value = false
+  editingContent.value = ''
   errorMsg.value = ''
 
   try {
@@ -537,6 +611,12 @@ async function generateDoc() {
         fields: formData.value
       })
     })
+
+    if (response.status === 401) {
+      // 令牌过期：清掉登录态，避免接下来所有请求继续 401
+      logout()
+      throw new Error('登录已过期，请重新登录')
+    }
 
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`)
@@ -572,6 +652,8 @@ async function generateDoc() {
                 resultScrollbar.value.scrollTo({ top: 999999 })
               }
             } else if (event.type === 'done') {
+              // 后端保存后会把记录 id 一起带回来，供「编辑 → 保存」使用
+              currentRecordId.value = event.record_id || null
               // 生成完成，刷新历史记录
               await loadHistory()
             } else if (event.type === 'error') {
@@ -591,23 +673,236 @@ async function generateDoc() {
   }
 }
 
-function exportDoc() {
+// ==================== 在线编辑 ====================
+
+function startEditGenerated() {
   if (!generatedContent.value) return
-  downloadDoc(selectedDocType.value, generatedContent.value)
+  editingContent.value = generatedContent.value
+  isEditingGenerated.value = true
+}
+
+function cancelGeneratedEdit() {
+  isEditingGenerated.value = false
+  editingContent.value = ''
+}
+
+async function saveGeneratedEdit() {
+  if (!editingContent.value.trim()) {
+    errorMsg.value = '文书内容不能为空'
+    return
+  }
+
+  // 游客（或落库失败）没有记录 id：修改只能保留在本地
+  if (!currentRecordId.value) {
+    generatedContent.value = editingContent.value
+    isEditingGenerated.value = false
+    alert('当前结果没有对应的历史记录（未登录或保存失败），修改仅保留在本地')
+    return
+  }
+
+  isSavingEdit.value = true
+  try {
+    const response = await axios.put(`/api/history/${currentRecordId.value}`, {
+      content: editingContent.value
+    })
+    if (response.data.success) {
+      generatedContent.value = editingContent.value
+      isEditingGenerated.value = false
+      await loadHistory()
+      alert('保存成功')
+    } else {
+      alert('保存失败: ' + response.data.message)
+    }
+  } catch (error) {
+    if (error.response?.status === 401) {
+      logout()
+      return
+    }
+    console.error('保存修改失败:', error)
+    alert('保存失败，请检查网络')
+  } finally {
+    isSavingEdit.value = false
+  }
+}
+
+function startEditRecord(record) {
+  if (!record) return
+  editingRecordContent.value = record.generated_content || ''
+  isEditingRecord.value = true
+}
+
+function cancelRecordEdit() {
+  isEditingRecord.value = false
+  editingRecordContent.value = ''
+}
+
+async function saveRecordEdit() {
+  if (!selectedRecord.value) return
+  if (!editingRecordContent.value.trim()) {
+    alert('文书内容不能为空')
+    return
+  }
+
+  isSavingRecord.value = true
+  try {
+    const recordId = selectedRecord.value.id
+    const response = await axios.put(`/api/history/${recordId}`, {
+      content: editingRecordContent.value
+    })
+    if (response.data.success) {
+      selectedRecord.value.generated_content = editingRecordContent.value
+      // 如果编辑的正是生成页当前展示的那条记录，同步更新
+      if (currentRecordId.value === recordId) {
+        generatedContent.value = editingRecordContent.value
+      }
+      isEditingRecord.value = false
+      editingRecordContent.value = ''
+      await loadHistory()
+      alert('保存成功')
+    } else {
+      alert('保存失败: ' + response.data.message)
+    }
+  } catch (error) {
+    if (error.response?.status === 401) {
+      logout()
+      return
+    }
+    console.error('保存修改失败:', error)
+    alert('保存失败，请检查网络')
+  } finally {
+    isSavingRecord.value = false
+  }
+}
+
+// ==================== 导出 ====================
+
+function escapeHtml(text) {
+  return String(text ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+/**
+ * 生成可打印的完整 HTML。
+ *
+ * 之前导出直接写纯文本但用 .doc 后缀，Word 打开后没有标题、没有版式。
+ * 这里用带样式的 HTML + Word 的 MIME 类型，既保留排版，又不引入 PDF 依赖；
+ * 「导出 PDF」则走浏览器打印（在打印对话框里选择「另存为 PDF」）。
+ */
+function buildPrintableHtml(docType, content) {
+  const title = escapeHtml(docType || '法律文书')
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>${title}</title>
+<style>
+  @page { size: A4; margin: 2.54cm; }
+  body {
+    font-family: 'SimSun', 'Songti SC', 'Noto Serif CJK SC', serif;
+    font-size: 14pt;
+    line-height: 1.9;
+    color: #111;
+    margin: 0;
+  }
+  h1 { text-align: center; font-size: 18pt; margin: 0 0 24pt; }
+  pre {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    font-family: inherit;
+    font-size: inherit;
+    line-height: inherit;
+    margin: 0;
+  }
+</style>
+</head>
+<body>
+<h1>${title}</h1>
+<pre>${escapeHtml(content)}</pre>
+</body>
+</html>`
+}
+
+function exportDoc() {
+  if (!effectiveContent.value) return
+  downloadDoc(selectedDocType.value, effectiveContent.value)
 }
 
 function exportRecord(record) {
   if (!record) return
-  downloadDoc(record.doc_type, record.generated_content)
+  const content = isEditingRecord.value ? editingRecordContent.value : record.generated_content
+  downloadDoc(record.doc_type, content)
 }
 
 function downloadDoc(docType, content) {
-  const blob = new Blob([content], { type: 'application/msword' })
+  if (!content) return
+  // ﻿（BOM）：帮助 Word 正确识别 UTF-8，避免中文乱码
+  const blob = new Blob(['\ufeff', buildPrintableHtml(docType, content)], {
+    type: 'application/msword;charset=utf-8'
+  })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `${docType}.doc`
+  a.download = `${docType || '法律文书'}.doc`
+  document.body.appendChild(a)
   a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+function printDoc() {
+  if (!effectiveContent.value) return
+  printContent(selectedDocType.value, effectiveContent.value)
+}
+
+function printRecord(record) {
+  if (!record) return
+  const content = isEditingRecord.value ? editingRecordContent.value : record.generated_content
+  printContent(record.doc_type, content)
+}
+
+function printContent(docType, content) {
+  if (!content) return
+  const printWindow = window.open('', '_blank')
+  if (!printWindow) {
+    alert('浏览器拦截了弹出窗口，请允许弹窗后重试')
+    return
+  }
+  printWindow.document.open()
+  printWindow.document.write(buildPrintableHtml(docType, content))
+  printWindow.document.close()
+  // 留一点时间给浏览器完成排版；在打印对话框中选「另存为 PDF」即可
+  setTimeout(() => {
+    printWindow.focus()
+    printWindow.print()
+  }, 300)
+}
+
+async function copyDoc() {
+  const content = effectiveContent.value
+  if (!content) return
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(content)
+    } else {
+      // 兼容非 HTTPS 环境：clipboard API 在 http:// 下不可用
+      const textarea = document.createElement('textarea')
+      textarea.value = content
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      textarea.remove()
+    }
+    alert('已复制到剪贴板')
+  } catch (error) {
+    console.error('复制失败:', error)
+    alert('复制失败，请手动选择文本复制')
+  }
 }
 
 async function loadHistory() {
@@ -634,6 +929,8 @@ async function loadHistory() {
 
 function viewRecord(record) {
   selectedRecord.value = record
+  isEditingRecord.value = false
+  editingRecordContent.value = ''
   showDetail.value = true
 }
 

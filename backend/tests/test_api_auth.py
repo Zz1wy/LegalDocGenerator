@@ -14,7 +14,7 @@ API 认证测试：用户注册、登录、JWT 令牌验证
 import pytest
 import time
 from main import create_access_token, SECRET_KEY, ALGORITHM
-from jose import jwt
+import jwt
 
 
 # ==================== 用户注册 ====================
@@ -59,11 +59,11 @@ class TestUserRegistration:
     @pytest.mark.parametrize("username,password,desc", [
         ("ab", "ValidPass1!", "用户名 2 字符（最短）"),
         ("a" * 50, "ValidPass1!", "用户名 50 字符（最长）"),
-        ("user123", "Ab1!", "密码 4 字符（最短）"),
-        ("user123", "a" * 128, "密码 128 字符（最长）"),
+        ("user123", "Abcdefg1", "密码 8 字符（最短）"),
+        ("user123", "a" * 72, "密码 72 字节（bcrypt 上限）"),
     ])
     def test_register_boundary_values(self, client, mock_database, username, password, desc):
-        """🔲 边界值：各种长度边界应正常处理"""
+        """🔲 边界值：合法范围内的长度边界应正常处理"""
         response = client.post("/api/register", json={
             "username": username,
             "password": password
@@ -74,21 +74,29 @@ class TestUserRegistration:
 
     @pytest.mark.parametrize("username,password,desc", [
         ("", "Pass123!", "空用户名"),
+        ("u", "Pass123!", "用户名 1 字符"),
         ("user", "", "空密码"),
+        ("user", "Short1!", "密码 7 字符"),
         ("", "", "全部为空"),
         ("u" * 51, "Pass123!", "用户名超长 51 字符"),
+        ("user123", "a" * 73, "密码超过 72 字节"),
     ])
     def test_register_invalid_input(self, client, mock_database, username, password, desc):
-        """❌ 非法输入：空值或超长值应仍能处理（不崩溃）"""
+        """❌ 非法输入：服务端应直接以 422 拒绝，不能绕过前端校验"""
         response = client.post("/api/register", json={
             "username": username,
             "password": password
         })
-        # 不应返回 500 错误
+        assert response.status_code == 422, f"应拒绝: {desc}"
+
+    def test_register_strips_whitespace_username(self, client, mock_database):
+        """用户名两侧空格应被去掉，避免出现「看起来一样」的重复账号"""
+        response = client.post("/api/register", json={
+            "username": "  newuser  ",
+            "password": "Pass123!"
+        })
         assert response.status_code == 200
-        data = response.json()
-        # 可以成功或失败，但不能崩溃
-        assert "success" in data
+        assert response.json()["user"]["username"] == "newuser"
 
     def test_register_special_characters(self, client, mock_database):
         """🔲 特殊字符：中文/Emoji/符号应正常处理"""
@@ -218,7 +226,7 @@ class TestJWTToken:
         """❌ 用错误的密钥解码"""
         token = create_access_token(data={"user_id": 1})
         with pytest.raises(Exception):
-            jwt.decode(token, "wrong-secret-key", algorithms=[ALGORITHM])
+            jwt.decode(token, "wrong-secret-key-32-bytes-minimum", algorithms=[ALGORITHM])
 
     def test_token_user_info_endpoint(self, client, auth_headers):
         """✅ 携带 Token 访问 /api/user"""

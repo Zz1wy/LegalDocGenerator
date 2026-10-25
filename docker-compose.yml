@@ -9,8 +9,13 @@ services:
     image: mysql:8.0
     container_name: legal_doc_mysql
     environment:
-      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-123456}
+      # root 密码只用于初始化/运维；后端使用下面的普通应用账号，不用 root。
+      # 不提供默认密码：未配置时 compose 直接报错退出，避免弱密码静默启动。
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD 未设置，请在项目根目录的 .env 中配置}
       MYSQL_DATABASE: ${DB_NAME:-legal_doc_db}
+      # MySQL 官方镜像会在首次初始化时创建该用户，并只授予该数据库的权限。
+      MYSQL_USER: ${DB_USER:-legal_app}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD 未设置，请在项目根目录的 .env 中配置}
     volumes:
       # 数据持久化：容器删除后数据不丢失
       - mysql_data:/var/lib/mysql
@@ -34,7 +39,9 @@ services:
     volumes:
       - ollama_data:/root/.ollama
     ports:
-      - "11434:11434"
+      # 只绑回环地址：Ollama 没有任何鉴权，暴露到局域网等于把模型算力
+      # 免费送给所有人（还能被用来拉取任意模型）。后端通过内部网络访问。
+      - "127.0.0.1:11434:11434"
     restart: always
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
@@ -68,8 +75,9 @@ services:
     environment:
       - DB_HOST=mysql
       - DB_PORT=3306
-      - DB_USER=root
-      - DB_PASSWORD=${DB_PASSWORD:-123456}
+      # 使用最小权限的应用账号，而不是 MySQL root。
+      - DB_USER=${DB_USER:-legal_app}
+      - DB_PASSWORD=${DB_PASSWORD:?DB_PASSWORD 未设置，请在项目根目录的 .env 中配置}
       - DB_NAME=${DB_NAME:-legal_doc_db}
       - OLLAMA_HOST=http://ollama:11434
       # ⚠️ 故意不给默认值。以前这里写的是 ${SECRET_KEY:-change-me-in-production}，
@@ -77,20 +85,38 @@ services:
       # 任意用户的 JWT。现在用 :? 让 compose 直接报错退出（fail closed）。
       # 在项目根目录创建 .env 文件并写入：
       #   SECRET_KEY=<python -c "import secrets; print(secrets.token_hex(32))" 的输出>
-      #   DB_PASSWORD=<你自己的数据库密码>
+      #   DB_ROOT_PASSWORD=<MySQL root 密码，仅初始化/运维使用>
+      #   DB_PASSWORD=<应用账号 legal_app 的密码>
+      #   DB_USER=legal_app
       - SECRET_KEY=${SECRET_KEY:?SECRET_KEY 未设置，请在项目根目录的 .env 中配置}
       - RATE_LIMIT_ENABLED=${RATE_LIMIT_ENABLED:-true}
-      - ADMIN_USERNAMES=${ADMIN_USERNAMES:-}
+      # 不给默认空值：公开/生产部署必须显式指定管理员，否则任何登录用户都能
+      # 触发高开销的知识库重建。本地直接运行 main.py 时仍可按需留空。
+      - ADMIN_USERNAMES=${ADMIN_USERNAMES:?ADMIN_USERNAMES 未设置，请配置管理员用户名}
+      # 请求都经过 frontend 容器里的 Nginx 转发，必须从 X-Forwarded-For
+      # 还原真实客户端 IP，否则全站用户共享同一个限流桶。
+      - TRUST_PROXY_HEADERS=${TRUST_PROXY_HEADERS:-true}
+      - TRUSTED_PROXY_NETWORKS=${TRUSTED_PROXY_NETWORKS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
     volumes:
       # ChromaDB 向量数据库持久化（避免每次重启重建知识库）
       - chroma_data:/app/rag/chroma_db
     ports:
-      - "8000:8000"
+      # 只绑回环地址。外部访问统一走 frontend 的 Nginx（80 端口）；
+      # 这样也避免了「绕过 Nginx 直连后端、伪造 X-Forwarded-For」的路径。
+      - "127.0.0.1:8000:8000"
     depends_on:
       mysql:
         condition: service_healthy
       ollama:
         condition: service_healthy
+    healthcheck:
+      # 镜像里没有 curl，用 Python 标准库探活
+      test: ["CMD", "python", "-c", "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).status == 200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      # 首次启动要构建 RAG 知识库（逐块向量化），给足冷启动时间
+      start_period: 180s
     restart: always
 
   # ==================== 5. 前端（含 Nginx） ====================
@@ -100,7 +126,14 @@ services:
     ports:
       - "80:80"
     depends_on:
-      - backend
+      backend:
+        # 等后端健康检查通过再启动 Nginx，避免容器刚起来时 /api 全 502
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     restart: always
 
 volumes:

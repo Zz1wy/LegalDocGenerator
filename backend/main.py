@@ -6,11 +6,12 @@ from typing import List, Optional
 import os
 import json
 import time
+import ipaddress
 import httpx
 from dotenv import load_dotenv
 from database import get_all_templates
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from jose import JWTError, jwt
+import jwt
 from datetime import datetime, timedelta, timezone
 from passlib.context import CryptContext
 import hashlib
@@ -45,6 +46,11 @@ if not SECRET_KEY or SECRET_KEY in _PLACEHOLDER_SECRETS:
         "SECRET_KEY 未配置或仍为示例值，拒绝启动。\n"
         "请在 backend/.env 中设置一个随机密钥：\n"
         '  python -c "import secrets; print(secrets.token_hex(32))"'
+    )
+if len(SECRET_KEY.encode("utf-8")) < 32:
+    raise RuntimeError(
+        "SECRET_KEY 长度不足 32 字节，拒绝启动。\n"
+        '请生成一个足够长的随机密钥：python -c "import secrets; print(secrets.token_hex(32))"'
     )
 
 ALGORITHM = "HS256"
@@ -86,6 +92,39 @@ app.add_middleware(
 #      要更平滑可以换成滑动窗口或令牌桶。
 RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "true").lower() not in ("0", "false", "no")
 
+# 反向代理（Nginx）后面的真实客户端 IP 解析。
+#
+# 为什么需要：Docker 部署时，所有请求都从 Nginx 容器转发进来，后端看到的
+# request.client.host 永远是 Nginx 的内网地址。如果直接拿它做限流 key，全站
+# 所有用户会共享同一个桶 —— 一个人打满 /api/generate，所有人一起 429。
+#
+# 安全边界：X-Forwarded-For 是客户端可以伪造的请求头，所以只有在「直连对端
+# 本身就是可信代理」时才读取它，并且只取 Nginx 追加的最右一项
+# （$proxy_add_x_forwarded_for 会把真实地址追加在列表末尾）。
+TRUST_PROXY_HEADERS = os.getenv("TRUST_PROXY_HEADERS", "false").lower() in ("1", "true", "yes", "on")
+
+
+def _parse_trusted_networks(raw: str) -> tuple:
+    """解析 CIDR 白名单。非法项跳过而不是让服务启动失败。"""
+    networks = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(item, strict=False))
+        except ValueError:
+            print(f"⚠️ 忽略非法的 TRUSTED_PROXY_NETWORKS 项: {item}")
+    return tuple(networks)
+
+
+# 默认覆盖本机回环和 Docker 常用私网段。注意：只有 TRUST_PROXY_HEADERS=true
+# 时这份白名单才会生效，直连后端的外部请求无法伪造来源 IP。
+TRUSTED_PROXY_NETWORKS = _parse_trusted_networks(os.getenv(
+    "TRUSTED_PROXY_NETWORKS",
+    "127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16",
+))
+
 RATE_LIMIT_RULES = {
     "/api/generate":         (20, 60),    # 每分钟 20 次
     "/api/generate/stream":  (20, 60),
@@ -123,17 +162,87 @@ def check_rate_limit(client_ip: str, path: str, now: float) -> Optional[int]:
     return None
 
 
+_RATE_BUCKET_PRUNE_THRESHOLD = 1024
+
+
+def prune_rate_buckets(now: float) -> int:
+    """
+    清掉已经过期的计数器。
+
+    _rate_buckets 的 key 是 (client_ip, path)。如果只增不减，每个访问过的 IP
+    都会永久留下一个列表 —— 长期运行时就是一条缓慢的内存泄漏。这里在字典
+    规模超过阈值时顺手清理，返回删除的条目数（便于测试）。
+    """
+    max_window = max(window for _, window in RATE_LIMIT_RULES.values())
+    stale_keys = [
+        key for key, (started_at, _) in _rate_buckets.items()
+        if now - started_at >= max_window
+    ]
+    for key in stale_keys:
+        del _rate_buckets[key]
+    return len(stale_keys)
+
+
+def _parse_ip(value: str):
+    try:
+        return ipaddress.ip_address(value.strip())
+    except ValueError:
+        return None
+
+
+def _is_trusted_proxy(ip) -> bool:
+    return any(ip in network for network in TRUSTED_PROXY_NETWORKS if network.version == ip.version)
+
+
+def get_client_ip(request: Request) -> str:
+    """
+    解析真实客户端 IP（用于限流 key）。
+
+    - 默认（未开启 TRUST_PROXY_HEADERS）：直接用 TCP 对端地址。
+    - 开启后：仅当直连对端位于 TRUSTED_PROXY_NETWORKS 内时才采信
+      X-Forwarded-For，并且**只取最右一项**。
+
+    为什么只取最右一项：Nginx 的 `$proxy_add_x_forwarded_for` 会把真实客户端
+    地址追加到列表末尾，而左边的部分是客户端可以任意伪造的。若改为「从右往左
+    跳过可信代理」，当真实客户端本身是私网地址（企业内网很常见）时会被误认为
+    代理而跳过，反而让伪造的左侧条目生效。当前是单层 Nginx，取最右一项最简单
+    也最安全。多级代理场景应改为显式配置每一跳的信任关系。
+    """
+    peer = request.client.host if request.client else "unknown"
+    if not TRUST_PROXY_HEADERS:
+        return peer
+
+    peer_ip = _parse_ip(peer)
+    if peer_ip is None or not _is_trusted_proxy(peer_ip):
+        return peer
+
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    if not forwarded_for:
+        return peer
+
+    entries = [part.strip() for part in forwarded_for.split(",") if part.strip()]
+    if not entries:
+        return peer
+
+    # 最后一项由我们信任的 Nginx 追加，前面的内容不可信，直接忽略
+    candidate = _parse_ip(entries[-1])
+    return str(candidate) if candidate is not None else peer
+
+
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
     if RATE_LIMIT_ENABLED:
-        client_ip = request.client.host if request.client else "unknown"
-        retry_after = check_rate_limit(client_ip, request.url.path, time.monotonic())
+        now = time.monotonic()
+        client_ip = get_client_ip(request)
+        retry_after = check_rate_limit(client_ip, request.url.path, now)
         if retry_after is not None:
             return JSONResponse(
                 status_code=429,
                 content={"success": False, "message": "请求过于频繁，请稍后再试"},
                 headers={"Retry-After": str(retry_after)},
             )
+        if len(_rate_buckets) > _RATE_BUCKET_PRUNE_THRESHOLD:
+            prune_rate_buckets(now)
     return await call_next(request)
 
 
@@ -167,13 +276,34 @@ class GenerateRequest(BaseModel):
         return v
 
 class UserRegister(BaseModel):
-    username: str
-    password: str
-    nickname: Optional[str] = None
+    """
+    注册请求。
+
+    服务端必须自己校验用户名/密码，不能只依赖前端表单：API 可以被直接调用。
+    尤其要拒绝空密码和超长密码——bcrypt 只处理前 72 字节，超出部分被静默忽略，
+    会让两个不同的长密码得到相同的哈希。
+    """
+    username: str = Field(..., min_length=2, max_length=50)
+    password: str = Field(..., min_length=8)
+    nickname: Optional[str] = Field(default=None, max_length=50)
+
+    @field_validator("username", mode="before")
+    @classmethod
+    def _strip_username(cls, v):
+        return v.strip() if isinstance(v, str) else v
+
+    @field_validator("password")
+    @classmethod
+    def _limit_password_bytes(cls, v: str) -> str:
+        if len(v.encode("utf-8")) > 72:
+            raise ValueError("密码不能超过 72 字节（bcrypt 的限制）")
+        return v
 
 class UserLogin(BaseModel):
-    username: str
-    password: str
+    # 登录侧只做基本上限，避免超长请求体；不强制新密码策略，
+    # 否则会锁死历史上用短密码注册的账号。
+    username: str = Field(..., max_length=50)
+    password: str = Field(..., max_length=200)
 
 class TokenResponse(BaseModel):
     success: bool
@@ -185,6 +315,10 @@ class GenerateResponse(BaseModel):
     success: bool
     content: str
     message: Optional[str] = None
+
+class UpdateRecordRequest(BaseModel):
+    """在线编辑后保存的请求体。上限与生成字段的规模上限保持同一量级。"""
+    content: str = Field(..., min_length=1, max_length=200_000)
 
 # ==================== 密码 & JWT 工具函数 ====================
 
@@ -245,7 +379,7 @@ async def get_optional_user(
 
     try:
         payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
-    except JWTError:
+    except jwt.PyJWTError:
         raise HTTPException(status_code=401, detail="无效或已过期的认证凭据")
 
     user_id = payload.get("user_id")
@@ -419,7 +553,7 @@ def build_prompt_with_rag(doc_type: str, fields: dict) -> str:
     与基础版 build_prompt 的区别：
     1. 先从法律知识库检索相关条文和模板
     2. 将检索结果拼接到 Prompt 中
-    3. 指示 LLM 引用真实法律条文
+    3. 提示 LLM 只引用检索到的条文，不确定时标注待核实
 
     如果 RAG 不可用或检索失败，自动回退到基础版 build_prompt
     """
@@ -437,10 +571,10 @@ def build_prompt_with_rag(doc_type: str, fields: dict) -> str:
 {rag_context}
 
 【重要要求】
-请参考上述法律条文内容生成文书，确保：
-1. 引用的法律条款准确无误
-2. 文书条款符合相关法律法规的规定
-3. 在必要时可以在文书中注明所依据的法律条款编号"""
+请参考上述法律条文内容生成文书，并遵守：
+1. 只引用你能确认的条文；不确定时不要编造条号或原文，用【待核实】标注
+2. 文书条款应与检索内容一致，不要声称已经过法律审查
+3. 在必要时注明所依据的法律条款编号，供人工复核"""
                 return enhanced
         except Exception as e:
             print(f"⚠️ RAG 检索失败，使用基础 Prompt: {e}")
@@ -569,15 +703,18 @@ async def generate_document(
 
         # 只有登录用户才落库。没有归属的记录一旦写进表里，要么对所有人可见
         # （这就是之前的越权漏洞），要么变成无人认领的垃圾数据，两种都不合适。
+        record_id = None
         if current_user is not None:
             from database import save_generated_record_with_user
-            save_generated_record_with_user(
+            record_id = save_generated_record_with_user(
                 request.doc_type, request.fields, content, current_user["id"]
             )
 
-        return {"success": True, "content": content}
+        return {"success": True, "content": content, "record_id": record_id}
     except Exception as e:
-        return {"success": False, "content": "", "message": str(e)}
+        # 详细异常只写服务端日志，不把内部地址/堆栈返回给客户端。
+        print(f"⚠️ 文书生成失败: {e}")
+        return {"success": False, "content": "", "message": "生成失败，请稍后重试"}
 
 @app.post("/api/generate/stream")
 async def generate_document_stream(
@@ -611,17 +748,19 @@ async def generate_document_stream(
                 yield f"data: {json.dumps({'type': 'content', 'text': chunk}, ensure_ascii=False)}\n\n"
 
             # 生成完成后保存到数据库（仅登录用户，游客不落库）
+            record_id = None
             if current_user is not None:
                 from database import save_generated_record_with_user
-                save_generated_record_with_user(
+                record_id = save_generated_record_with_user(
                     request.doc_type, request.fields, full_content, current_user["id"]
                 )
 
-            # 推送完成事件
-            yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+            # 推送完成事件。带上 record_id，前端后续「在线编辑 → 保存」才有目标。
+            yield f"data: {json.dumps({'type': 'done', 'record_id': record_id}, ensure_ascii=False)}\n\n"
         except Exception as e:
-            # 出错时推送错误事件
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+            # 详细异常只写服务端日志，不把内部地址/堆栈返回给客户端。
+            print(f"⚠️ 流式文书生成失败: {e}")
+            yield f"data: {json.dumps({'type': 'error', 'message': '生成失败，请稍后重试'}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         event_generator(),
@@ -665,6 +804,26 @@ async def delete_history_record(record_id: int, current_user: dict = Depends(get
         return {"success": True, "message": "删除成功"}
     else:
         return {"success": False, "message": "记录不存在或无权删除"}
+
+@app.put("/api/history/{record_id}")
+async def update_history_record(
+    record_id: int,
+    payload: UpdateRecordRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    保存对某条历史文书的在线编辑。
+
+    和删除一样，UPDATE 语句带 `AND user_id = %s`：改别人的记录命中 0 行，
+    返回值与「记录不存在」一致，不泄露记录归属。
+    """
+    from database import update_record_content_by_user
+
+    success = update_record_content_by_user(record_id, current_user["id"], payload.content)
+
+    if success:
+        return {"success": True, "message": "保存成功"}
+    return {"success": False, "message": "记录不存在或无权修改"}
 
 @app.get("/health")
 async def health_check():
@@ -726,4 +885,6 @@ async def startup_event():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    # 本地直接运行只监听回环地址，避免误把无 Nginx 的后端暴露到局域网/公网。
+    # Docker 部署由 Dockerfile 的 uvicorn 命令显式监听 0.0.0.0（端口仅在容器内）。
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)

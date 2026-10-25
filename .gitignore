@@ -8,9 +8,10 @@ node_modules/
 dist/
 
 # 配置文件（包含敏感信息，绝对不能提交！）
-.env
-.env.local
-.env.prod
+# 覆盖 .env、.env.local、.env.prod、.env.development、.env.test、.env.production 等全部变体；
+# 只保留示例模板。
+.env*
+!.env.example
 
 # RAG 向量数据库缓存
 backend/rag/chroma_db/

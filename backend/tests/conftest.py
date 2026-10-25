@@ -22,7 +22,7 @@ from unittest.mock import patch, MagicMock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # ==================== 环境变量 ====================
-os.environ["SECRET_KEY"] = "test-secret-key-for-pytest-only"
+os.environ["SECRET_KEY"] = "test-secret-key-for-pytest-only-32bytes"
 os.environ["OLLAMA_HOST"] = "http://localhost:11434"
 # 关闭限流：测试会从同一个 TestClient IP 打出上百次请求，
 # 开着限流会大面积误报 429。限流逻辑本身在 tests/test_rate_limit.py 里单独测。
@@ -34,6 +34,7 @@ _mock_cursor = MagicMock()
 _mock_cursor.fetchall.return_value = []
 _mock_cursor.fetchone.return_value = None
 _mock_cursor.lastrowid = 1
+_mock_cursor.rowcount = 1
 _mock_conn.cursor.return_value = _mock_cursor
 
 # Mock database.py 模块级连接池
@@ -41,7 +42,10 @@ patch("database.db_pool", MagicMock()).start()
 patch("database.get_db_connection", return_value=_mock_conn).start()
 patch("database.get_all_templates", return_value=[]).start()
 patch("database.save_generated_record", return_value=True).start()
-patch("database.save_generated_record_with_user", return_value=True).start()
+# 注意：save_generated_record_with_user / update_record_content_by_user 不整体
+# patch —— 它们走真实的 SQL 组装逻辑，底层 get_db_connection 已被 mock 成
+# _mock_conn（lastrowid=1、rowcount=1）。这样 tests/test_database.py 才能真正
+# 断言函数行为，而不是在断言 mock 的返回值。
 patch("database.create_user", return_value=1).start()
 patch("database.get_user_by_username", return_value=None).start()
 patch("database.get_user_by_id", return_value={
@@ -83,7 +87,8 @@ def _reset_mocks():
     db_module.get_db_connection.return_value = _mock_conn
     db_module.get_all_templates.return_value = []
     db_module.save_generated_record.return_value = True
-    db_module.save_generated_record_with_user.return_value = True
+    _mock_cursor.lastrowid = 1
+    _mock_cursor.rowcount = 1
     db_module.create_user.return_value = 1
     db_module.get_user_by_username.return_value = None
     db_module.get_user_by_id.return_value = {"id": 1, "username": "testuser", "nickname": "测试用户"}
@@ -105,7 +110,16 @@ def mock_database():
         "save_record": db_module.save_generated_record_with_user,
         "history": db_module.get_history_by_user,
         "delete_user": db_module.delete_record_by_user,
+        "update_record": db_module.update_record_content_by_user,
     }
+
+@pytest.fixture
+def mock_cursor():
+    """共享的 mock 游标，用于断言真实 SQL 是否按预期执行"""
+    _mock_cursor.reset_mock()
+    _mock_cursor.lastrowid = 1
+    _mock_cursor.rowcount = 1
+    return _mock_cursor
 
 @pytest.fixture
 def client():
