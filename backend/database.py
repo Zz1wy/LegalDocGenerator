@@ -1,25 +1,40 @@
 import os
+import threading
 import mysql.connector
 from mysql.connector import pooling
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# 数据库连接池配置
-db_pool = pooling.MySQLConnectionPool(
-    pool_name="legal_pool",
-    pool_size=5,
-    host=os.getenv("DB_HOST", "localhost"),
-    port=int(os.getenv("DB_PORT", 3306)),
-    user=os.getenv("DB_USER", "legal_app"),
-    password=os.getenv("DB_PASSWORD", ""),
-    database=os.getenv("DB_NAME", "legal_doc_db")
-)
+# 连接池延迟初始化：模块导入时不应要求数据库已经就绪。
+# 测试会在导入后把 db_pool 替换为 MagicMock；生产环境在第一次取连接时创建。
+db_pool = None
+_pool_lock = threading.Lock()
+
+
+def _init_db_pool():
+    """线程安全地创建连接池（仅首次调用真正连接数据库）"""
+    global db_pool
+    if db_pool is not None:
+        return db_pool
+    with _pool_lock:
+        if db_pool is None:
+            db_pool = pooling.MySQLConnectionPool(
+                pool_name="legal_pool",
+                pool_size=5,
+                host=os.getenv("DB_HOST", "localhost"),
+                port=int(os.getenv("DB_PORT", 3306)),
+                user=os.getenv("DB_USER", "legal_app"),
+                password=os.getenv("DB_PASSWORD", ""),
+                database=os.getenv("DB_NAME", "legal_doc_db"),
+            )
+    return db_pool
+
 
 def get_db_connection():
     """获取数据库连接"""
     try:
-        conn = db_pool.get_connection()
+        conn = _init_db_pool().get_connection()
         return conn
     except mysql.connector.Error as e:
         print(f"数据库连接失败: {e}")
