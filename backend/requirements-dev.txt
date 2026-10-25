@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # 开发/测试依赖（在 requirements.txt 之上叠加）
 -r requirements.txt
 
