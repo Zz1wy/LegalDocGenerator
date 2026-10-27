@@ -39,7 +39,7 @@
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
+import { ref, reactive, computed } from 'vue'
 import axios from 'axios'
 
 const emit = defineEmits(['login-success'])
@@ -54,9 +54,62 @@ const form = reactive({
   nickname: ''
 })
 
-const rules = {
-  username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
-  password: [{ required: true, message: '请输入密码', trigger: 'blur' }]
+// 只做「注册」时的长度校验；登录不限制下限，避免锁死历史上用短密码注册的账号。
+function validatePasswordBytes(rule, value, callback) {
+  if (value && new TextEncoder().encode(value).length > 72) {
+    callback(new Error('密码不能超过 72 字节'))
+  } else {
+    callback()
+  }
+}
+
+const rules = computed(() => ({
+  username: [
+    { required: true, message: '请输入用户名', trigger: 'blur' },
+    { min: 2, max: 50, message: '用户名长度需为 2–50 个字符', trigger: 'blur' }
+  ],
+  password: [
+    { required: true, message: '请输入密码', trigger: 'blur' },
+    ...(isLogin.value
+      ? []
+      : [
+          { min: 8, message: '密码至少 8 个字符', trigger: 'blur' },
+          { validator: validatePasswordBytes, trigger: 'blur' }
+        ])
+  ],
+  nickname: [{ max: 50, message: '昵称最多 50 个字符', trigger: 'blur' }]
+}))
+
+const FIELD_LABELS = { username: '用户名', password: '密码', nickname: '昵称' }
+const VALIDATION_MESSAGES = {
+  'String should have at least 8 characters': '至少需要 8 个字符',
+  'String should have at least 2 characters': '至少需要 2 个字符',
+  'String should have at most 50 characters': '最多 50 个字符',
+  'Field required': '不能为空'
+}
+
+// 后端 422 的 detail 是数组；401 等错误是字符串。把真正的原因显示出来，
+// 不要一律提示“检查网络”。
+function formatError(error) {
+  const data = error?.response?.data
+  const detail = data?.detail
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => {
+        const field = FIELD_LABELS[item.loc?.[item.loc.length - 1]] || ''
+        let msg = item.msg || item.type || '参数不合法'
+        msg = msg.replace(/^Value error, /, '')
+        msg = VALIDATION_MESSAGES[msg] || msg
+        // 后端自定义错误可能已带字段名（如“密码不能超过 72 字节”），避免重复
+        return field && !msg.startsWith(field) ? `${field}${msg}` : msg
+      })
+      .join('；')
+  }
+  if (typeof detail === 'string') return detail
+  // 限流等错误返回的是 { success: false, message: "..." }
+  if (typeof data?.message === 'string') return data.message
+  if (error?.response) return `请求失败（HTTP ${error.response.status}）`
+  return '无法连接服务器，请确认后端已启动'
 }
 
 async function handleSubmit() {
@@ -82,7 +135,7 @@ async function handleSubmit() {
     }
   } catch (error) {
     console.error('操作失败:', error)
-    alert('操作失败，请检查网络')
+    alert(formatError(error))
   } finally {
     loading.value = false
   }
