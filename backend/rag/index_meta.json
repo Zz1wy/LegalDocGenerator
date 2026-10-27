@@ -1,0 +1,31 @@
+{
+  "version": 2,
+  "checksum": "a8f79308e3e4e3902b6103d358c14b89463d10d7391089c74b6d1f752dde4e3f",
+  "count": 1984,
+  "embedding_model": "nomic-embed-text",
+  "chunk_size": 500,
+  "chunk_overlap": 80,
+  "built_at": "2026-10-26T13:39:36.084868+00:00",
+  "laws": [
+    "中华人民共和国公司法",
+    "中华人民共和国劳动合同法",
+    "中华人民共和国劳动法",
+    "中华人民共和国反不正当竞争法",
+    "中华人民共和国民事诉讼法",
+    "中华人民共和国民法典",
+    "保密协议（模板）"
+  ],
+  "corpus_files": [
+    "anti_unfair_competition_law.md",
+    "civil_code_contract.md",
+    "civil_code_general.md",
+    "civil_code_marriage.md",
+    "civil_code_property.md",
+    "civil_code_tort.md",
+    "civil_procedure_law.md",
+    "company_law.md",
+    "labor_contract_law.md",
+    "labor_law.md",
+    "nda_template.md"
+  ]
+}

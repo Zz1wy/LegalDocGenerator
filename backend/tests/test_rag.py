@@ -91,8 +91,12 @@ class TestRetrieval:
         """确保知识库已构建（仅构建一次）"""
         if not TestRetrieval.BUILT:
             try:
+                from rag.indexer import reset_retrieval_index
                 from rag.knowledge_base import build_knowledge_base
-                build_knowledge_base(force_rebuild=True)
+
+                # 只在语料校验和不一致时重建。整库重嵌入很慢，测试不必每次重来。
+                build_knowledge_base(force_rebuild=False)
+                reset_retrieval_index()
                 TestRetrieval.BUILT = True
             except Exception as e:
                 pytest.skip(f"知识库构建失败（可能 Ollama 未运行）: {e}")
@@ -146,6 +150,24 @@ class TestRetrieval:
         text = retrieve_simple("劳动合同", {"party_a": "测试"})
         assert isinstance(text, str)
         assert len(text) > 0
+
+    def test_retrieve_returns_traceable_citations(self):
+        """✅ 检索结果应带法名、条号、正文和来源，供 Prompt 与前端展示"""
+        from rag.retriever import retrieve
+
+        result = retrieve("劳动合同", {
+            "party_a": "科技公司",
+            "salary": "30000",
+            "term": "三年"
+        })
+        assert result["citations"], "混合检索应返回引用对象"
+        for citation in result["citations"]:
+            assert citation["law"]
+            assert citation["article"].startswith("第")
+            assert citation["text"]
+            assert citation["id"].startswith("S")
+        # 在线检索默认走混合检索，而不是纯向量
+        assert result["retrieval"]["config"] == "hybrid"
 
     def test_build_query(self):
         """✅ 查询文本构建"""

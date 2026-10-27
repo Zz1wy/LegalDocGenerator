@@ -1,204 +1,200 @@
 """
-RAG 检索模块
+法律条文检索。
 
-功能：
-根据用户输入的文书类型和字段信息，从 ChromaDB 中检索最相关的法律条文和模板
-
-检索策略（混合检索）：
-1. 用文书类型名称 + 关键字段值构建查询文本
-2. 在 ChromaDB 中做语义相似度检索
-3. 返回 Top-K 最相关的结果
-4. 额外追加：根据文书类型精确匹配的法律条文
+检索策略：
+1. 用「文书类型 + 关键字段」构造查询；
+2. 向量召回（语义）+ BM25 召回（精确词）各取 candidate_k；
+3. RRF 融合；
+4. 可选：LLM 重排（RERANK_ENABLED=true）；
+5. 返回带法名/条号/来源的引用对象，供 Prompt 与前端展示。
 """
 
+from __future__ import annotations
+
+import asyncio
 import os
-from pathlib import Path
+from typing import Optional
 
-# LangChain 组件导入
-try:
-    from langchain_ollama import OllamaEmbeddings
-    from langchain_community.vectorstores import Chroma
-    LANGCHAIN_AVAILABLE = True
-except ImportError:
-    OllamaEmbeddings = None
-    Chroma = None
-    LANGCHAIN_AVAILABLE = False
+from .citations import format_source_block
+from .hybrid import dense_search, hybrid_search
+from .indexer import get_retrieval_index
+from .query import expand_query
 
-from .knowledge_base import CHROMA_DB_DIR, EMBEDDING_MODEL, OLLAMA_HOST
+TOP_K = 5
+CANDIDATE_K = 20
 
-# 检索参数
-TOP_K = 5  # 返回最相似的前 K 条
+# 字段名中英文映射（让查询更自然）
+FIELD_LABELS = {
+    "party_a": "甲方", "party_b": "乙方", "term": "期限", "salary": "工资",
+    "plaintiff": "原告", "defendant": "被告", "claim": "诉讼请求", "reason": "事实理由",
+    "lender": "出借人", "borrower": "借款人", "amount": "金额", "repay_date": "还款日期",
+    "landlord": "出租方", "tenant": "承租方", "property": "租赁物", "rent": "租金",
+    "husband": "男方", "wife": "女方", "child_custody": "子女抚养",
+    "property_split": "财产分割", "transferor": "转让方", "transferee": "受让方",
+    "company_name": "公司", "share_ratio": "股权比例", "share_price": "转让价格",
+    "employer": "甲方", "employee": "乙方", "confidential_scope": "保密范围",
+    "confidential_period": "保密期限", "seller": "卖方", "buyer": "买方",
+    "house_address": "房屋地址", "house_area": "房屋面积", "house_price": "成交价格",
+    "client": "委托人", "agent": "受托人", "matter": "代理事项",
+    "authority": "代理权限", "period": "代理期限",
+}
 
-
-# ==================== 查询文本构建 ====================
-
-def build_query(doc_type: str, fields: dict) -> str:
-    """
-    将用户输入构建为检索查询文本
-
-    例如：
-      输入: doc_type="劳动合同", fields={"party_a": "字节跳动", "salary": "30000"}
-      输出: "劳动合同 甲方 字节跳动 工资 30000"
-    """
-    # 字段名中英文映射（让查询更自然）
-    field_labels = {
-        "party_a": "甲方",
-        "party_b": "乙方",
-        "term": "期限",
-        "salary": "工资",
-        "plaintiff": "原告",
-        "defendant": "被告",
-        "claim": "诉讼请求",
-        "reason": "事实理由",
-        "lender": "出借人",
-        "borrower": "借款人",
-        "amount": "金额",
-        "repay_date": "还款日期",
-        "landlord": "出租方",
-        "tenant": "承租方",
-        "property": "租赁物",
-        "rent": "租金",
-        "husband": "男方",
-        "wife": "女方",
-        "child_custody": "子女抚养",
-        "property_split": "财产分割",
-        "transferor": "转让方",
-        "transferee": "受让方",
-        "company_name": "公司",
-        "share_ratio": "股权比例",
-        "share_price": "转让价格",
-        "employer": "甲方",
-        "employee": "乙方",
-        "confidential_scope": "保密范围",
-        "confidential_period": "保密期限",
-        "seller": "卖方",
-        "buyer": "买方",
-        "house_address": "房屋地址",
-        "house_area": "房屋面积",
-        "house_price": "成交价格",
-        "client": "委托人",
-        "agent": "受托人",
-        "matter": "代理事项",
-        "authority": "代理权限",
-        "period": "代理期限",
-    }
-
-    parts = [doc_type]
-
-    for key, value in fields.items():
-        if value and str(value).strip():
-            label = field_labels.get(key, key)
-            parts.append(f"{label} {value}")
-
-    query = " ".join(parts)
-    return query
-
-
-# ==================== 精确匹配：文书类型→法律条文映射 ====================
-
-# 不同文书类型对应的最佳法律参考
+# 不同文书类型对应的最佳法律参考（无检索结果时的兜底提示）
 DOC_TYPE_TO_LEGAL_REF = {
-    "劳动合同": "劳动法 劳动合同 工资 试用期 解除合同 经济补偿",
-    "民事起诉状": "民事诉讼法 起诉状 诉讼请求 事实与理由 证据",
-    "借条": "借款合同 借条 利息 还款期限 违约责任",
-    "租赁合同": "租赁合同 出租 承租 租金 租赁期限 维修",
-    "离婚协议书": "离婚 子女抚养 财产分割 抚养费 共同债务 婚姻家庭",
-    "股权转让协议": "股权转让 股东 优先购买权 出资 变更登记 公司",
-    "保密协议": "保密协议 商业秘密 保密义务 违约责任 竞业限制",
-    "房屋买卖合同": "房屋买卖 买卖合同 过户 产权 定金 税费",
-    "委托代理书": "委托代理 代理权限 代理期限 受托人 委托人",
+    "劳动合同": "劳动法 劳动合同法 劳动合同 试用期 工资 解除合同 经济补偿 竞业限制",
+    "民事起诉状": "民事诉讼法 起诉条件 起诉状 诉讼请求 事实与理由 证据 管辖",
+    "借条": "民法典 借款合同 借条 利息 还款期限 逾期利息 违约责任",
+    "租赁合同": "民法典 租赁合同 出租 承租 租金 租赁期限 维修 买卖不破租赁",
+    "离婚协议书": "民法典 婚姻家庭 离婚 子女抚养 抚养费 财产分割 共同债务 冷静期",
+    "股权转让协议": "公司法 股权转让 股东 优先购买权 出资 变更登记 公司",
+    "保密协议": "民法典 反不正当竞争法 保密义务 商业秘密 竞业限制 违约责任",
+    "房屋买卖合同": "民法典 买卖合同 房屋买卖 过户 产权 定金 违约金 税费",
+    "委托代理书": "民法典 委托合同 代理 代理权限 代理期限 受托人 委托人 无权代理",
 }
 
 
-# ==================== 检索接口 ====================
+def build_query(doc_type: str, fields: dict) -> str:
+    """把表单转换成检索查询。字段太少时补上该文书类型的关键词。"""
+    parts = [doc_type or ""]
+    for key, value in (fields or {}).items():
+        if value and str(value).strip():
+            parts.append(f"{FIELD_LABELS.get(key, key)} {value}")
 
-def retrieve(doc_type: str, fields: dict, top_k: int = TOP_K) -> dict:
-    """
-    主检索函数
+    non_empty = [part for part in parts[1:] if part.strip()]
+    if len(non_empty) <= 1:
+        hint = DOC_TYPE_TO_LEGAL_REF.get(doc_type, "")
+        if hint:
+            parts.append(hint)
 
-    参数:
-        doc_type: 文书类型（如"劳动合同"）
-        fields:   用户填写的字段字典
-        top_k:    返回结果数量
+    return " ".join(part for part in parts if part.strip())
 
-    返回:
-        {
-            "legal_refs": ["相关法律条文1", "相关法律条文2", ...],
-            "template_refs": ["模板片段1", ...],
-            "combined": "合并后的参考文本，可以直接拼入 Prompt"
-        }
-    """
-    result = {
-        "legal_refs": [],
-        "template_refs": [],
-        "combined": ""
+
+def _to_citation(chunk: dict, index: int) -> dict:
+    return {
+        "id": f"S{index}",
+        "law": chunk.get("law", ""),
+        "short_name": chunk.get("short_name") or chunk.get("law", ""),
+        "book": chunk.get("book", ""),
+        "article": chunk.get("article", ""),
+        "article_num": int(chunk.get("article_num", 0) or 0),
+        "chapter": chunk.get("chapter", ""),
+        "text": chunk.get("text", ""),
+        "version_date": chunk.get("version_date", ""),
+        "effective_date": chunk.get("effective_date", ""),
+        "source_url": chunk.get("source_url", ""),
+        "retrieval_score": chunk.get("retrieval_score"),
+        "dense_rank": chunk.get("dense_rank"),
+        "bm25_rank": chunk.get("bm25_rank"),
     }
 
-    # 1. 语义检索（用 LangChain Retriever 从向量库找相似内容）
-    # as_retriever() 一行完成：查询向量化 → 相似度排序 → 返回 Top-K 个 Document
-    if LANGCHAIN_AVAILABLE and CHROMA_DB_DIR.exists():
+
+def _fallback_result(doc_type: str, reason: str = "") -> dict:
+    hint = DOC_TYPE_TO_LEGAL_REF.get(doc_type, doc_type)
+    text = f"请参考中国现行法律法规中关于「{hint}」的相关规定。"
+    return {
+        "legal_refs": [text],
+        "template_refs": [],
+        "citations": [],
+        "combined": text,
+        "retrieval": {"config": "fallback", "reason": reason},
+    }
+
+
+def _build_result(chunks: list[dict], query: str, config: str) -> dict:
+    citations = [_to_citation(chunk, i) for i, chunk in enumerate(chunks, start=1)]
+    legal_refs = [citation["text"] for citation in citations]
+    return {
+        "legal_refs": legal_refs,
+        "template_refs": [],
+        "citations": citations,
+        "combined": format_source_block(citations),
+        "retrieval": {
+            "config": config,
+            "query": query,
+            "count": len(citations),
+            "candidates": [
+                {
+                    "id": citation["id"],
+                    "law": citation["short_name"],
+                    "article": citation["article"],
+                    "dense_rank": citation["dense_rank"],
+                    "bm25_rank": citation["bm25_rank"],
+                }
+                for citation in citations
+            ],
+        },
+    }
+
+
+def retrieve(
+    doc_type: str,
+    fields: dict,
+    top_k: int = TOP_K,
+    config: str = "hybrid",
+) -> dict:
+    """同步检索接口（兼容旧测试与同步调用点）。"""
+    query = build_query(doc_type, fields)
+    return retrieve_by_query(query, top_k=top_k, config=config, fallback_type=doc_type)
+
+
+def retrieve_by_query(
+    query: str,
+    top_k: int = TOP_K,
+    config: str = "hybrid",
+    fallback_type: str = "",
+) -> dict:
+    """直接按自然语言查询检索，供评测脚本复用。"""
+    original_query = query
+    query = expand_query(query)
+    try:
+        index = get_retrieval_index()
+        if config == "dense":
+            chunks = dense_search(query, top_k=top_k, index=index)
+        else:
+            chunks = hybrid_search(query, top_k=top_k, index=index)[:top_k]
+        if not chunks:
+            return _fallback_result(fallback_type or original_query, "no_hit")
+        result = _build_result(chunks, query, config)
+        if query != original_query:
+            result["retrieval"]["original_query"] = original_query
+        return result
+    except Exception as exc:
+        print(f"⚠️ 检索失败，使用兜底提示: {exc}")
+        return _fallback_result(fallback_type or original_query, str(exc))
+
+
+async def aretrieve(
+    doc_type: str,
+    fields: dict,
+    top_k: int = TOP_K,
+    config: str = "hybrid",
+    rerank: Optional[bool] = None,
+) -> dict:
+    """异步检索：把同步的 embedding/Chroma 调用放到线程池，避免阻塞事件循环。"""
+    query = build_query(doc_type, fields)
+
+    enabled = rerank
+    if enabled is None:
+        enabled = os.getenv("RERANK_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+
+    fetch_k = max(top_k * 2, top_k) if enabled else top_k
+    result = await asyncio.to_thread(
+        retrieve_by_query, query, fetch_k, config, doc_type
+    )
+
+    citations = result.get("citations") or []
+    if enabled and len(citations) > top_k:
         try:
-            query = build_query(doc_type, fields)
-            embeddings = OllamaEmbeddings(model=EMBEDDING_MODEL, base_url=OLLAMA_HOST)
-            vectorstore = Chroma(
-                collection_name="legal_knowledge",
-                embedding_function=embeddings,
-                persist_directory=str(CHROMA_DB_DIR)
-            )
-            # search_kwargs={"k": top_k} 指定返回前 K 个结果
-            retriever = vectorstore.as_retriever(search_kwargs={"k": top_k})
-            docs = retriever.invoke(query)
+            from .rerank import llm_rerank
 
-            # docs 是 list[Document]，每个 Document 有 page_content 和 metadata
-            for doc in docs:
-                if doc.page_content and doc.page_content not in result["legal_refs"]:
-                    result["legal_refs"].append(doc.page_content)
+            reranked = await llm_rerank(query, citations, top_k=top_k)
+            result = _build_result(reranked, query, f"{config}+rerank")
+        except Exception as exc:
+            print(f"⚠️ 重排失败，保留 RRF 顺序: {exc}")
 
-        except Exception as e:
-            print(f"⚠️ 向量检索失败: {e}")
-
-    # 2. 精确匹配：根据文书类型追加相关法律提示
-    doc_keywords = DOC_TYPE_TO_LEGAL_REF.get(doc_type, doc_type)
-    if not result["legal_refs"]:
-        result["legal_refs"].append(f"请参考中国法律法规中关于{doc_keywords}的相关规定")
-
-    # 3. 合并为 Prompt 可用的格式
-    parts = []
-    if result["legal_refs"]:
-        parts.append("【相关法律参考】")
-        for i, ref in enumerate(result["legal_refs"], 1):
-            parts.append(f"{i}. {ref}")
-
-    result["combined"] = "\n\n".join(parts)
     return result
 
 
 def retrieve_simple(doc_type: str, fields: dict, top_k: int = TOP_K) -> str:
-    """
-    简化版检索接口：直接返回合并后的文本
-
-    用于在 build_prompt 中无缝集成
-    """
-    result = retrieve(doc_type, fields, top_k)
-    return result["combined"]
-
-
-# ==================== 测试 ====================
-
-if __name__ == "__main__":
-    # 测试检索
-    test_cases = [
-        ("劳动合同", {"party_a": "某科技公司", "salary": "15000元/月", "term": "三年"}),
-        ("离婚协议书", {"husband": "张三", "wife": "李四", "child_custody": "女儿归女方", "property_split": "房产归男方"}),
-        ("借条", {"lender": "王五", "borrower": "赵六", "amount": "10万元", "repay_date": "2025年12月31日"}),
-    ]
-
-    for doc_type, fields in test_cases:
-        print(f"\n{'='*60}")
-        print(f"📝 文书类型: {doc_type}")
-        print(f"📋 字段: {fields}")
-        print(f"{'='*60}")
-
-        result = retrieve(doc_type, fields)
-        print(f"\n检索到 {len(result['legal_refs'])} 条相关法律参考")
-        print(result["combined"][:500])
+    """兼容旧接口：直接返回拼入 Prompt 的文本。"""
+    return retrieve(doc_type, fields, top_k)["combined"]

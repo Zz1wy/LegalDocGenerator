@@ -1,0 +1,113 @@
+{
+  "civil_code_general.md": {
+    "law": "中华人民共和国民法典",
+    "short": "民法典",
+    "book": "总则编",
+    "version_date": "2020-05-28",
+    "effective_date": "2021-01-01",
+    "source_url": "https://flk.npc.gov.cn/",
+    "source_repo": "LawRefBook/Laws",
+    "source_path": "民法典/总则.md"
+  },
+  "civil_code_contract.md": {
+    "law": "中华人民共和国民法典",
+    "short": "民法典",
+    "book": "合同编",
+    "version_date": "2020-05-28",
+    "effective_date": "2021-01-01",
+    "source_url": "https://flk.npc.gov.cn/",
+    "source_repo": "LawRefBook/Laws",
+    "source_path": "民法典/合同编.md"
+  },
+  "civil_code_marriage.md": {
+    "law": "中华人民共和国民法典",
+    "short": "民法典",
+    "book": "婚姻家庭编",
+    "version_date": "2020-05-28",
+    "effective_date": "2021-01-01",
+    "source_url": "https://flk.npc.gov.cn/",
+    "source_repo": "LawRefBook/Laws",
+    "source_path": "民法典/婚姻家庭编.md"
+  },
+  "civil_code_property.md": {
+    "law": "中华人民共和国民法典",
+    "short": "民法典",
+    "book": "物权编",
+    "version_date": "2020-05-28",
+    "effective_date": "2021-01-01",
+    "source_url": "https://flk.npc.gov.cn/",
+    "source_repo": "LawRefBook/Laws",
+    "source_path": "民法典/物权编.md"
+  },
+  "civil_code_tort.md": {
+    "law": "中华人民共和国民法典",
+    "short": "民法典",
+    "book": "侵权责任编",
+    "version_date": "2020-05-28",
+    "effective_date": "2021-01-01",
+    "source_url": "https://flk.npc.gov.cn/",
+    "source_repo": "LawRefBook/Laws",
+    "source_path": "民法典/侵权责任编.md"
+  },
+  "company_law.md": {
+    "law": "中华人民共和国公司法",
+    "short": "公司法",
+    "book": "",
+    "version_date": "2023-12-29",
+    "effective_date": "2024-07-01",
+    "source_url": "https://flk.npc.gov.cn/",
+    "source_repo": "LawRefBook/Laws",
+    "source_path": "民法商法/公司法(2023-12-29).md"
+  },
+  "labor_contract_law.md": {
+    "law": "中华人民共和国劳动合同法",
+    "short": "劳动合同法",
+    "book": "",
+    "version_date": "2012-12-28",
+    "effective_date": "2013-07-01",
+    "source_url": "https://flk.npc.gov.cn/",
+    "source_repo": "LawRefBook/Laws",
+    "source_path": "社会法/劳动合同法(2012-12-28).md"
+  },
+  "labor_law.md": {
+    "law": "中华人民共和国劳动法",
+    "short": "劳动法",
+    "book": "",
+    "version_date": "2018-12-29",
+    "effective_date": "2018-12-29",
+    "source_url": "https://flk.npc.gov.cn/",
+    "source_repo": "LawRefBook/Laws",
+    "source_path": "社会法/劳动法(2018-12-29).md"
+  },
+  "anti_unfair_competition_law.md": {
+    "law": "中华人民共和国反不正当竞争法",
+    "short": "反不正当竞争法",
+    "book": "",
+    "version_date": "2025-06-27",
+    "effective_date": "2025-10-15",
+    "source_url": "https://flk.npc.gov.cn/",
+    "source_repo": "LawRefBook/Laws",
+    "source_path": "经济法/反不正当竞争法(2025-06-27).md"
+  },
+  "civil_procedure_law.md": {
+    "law": "中华人民共和国民事诉讼法",
+    "short": "民事诉讼法",
+    "book": "",
+    "version_date": "2023-09-01",
+    "effective_date": "2024-01-01",
+    "source_url": "https://flk.npc.gov.cn/",
+    "source_repo": "LawRefBook/Laws",
+    "source_path": "诉讼与非诉讼程序法/民事诉讼法(2023-09-01).md"
+  },
+  "nda_template.md": {
+    "law": "保密协议（模板）",
+    "short": "保密协议模板",
+    "book": "",
+    "version_date": "2025-06-23",
+    "effective_date": "",
+    "source_url": "",
+    "source_repo": "本项目整理",
+    "source_path": "backend/rag/legal_data/nda_template.md",
+    "is_template": true
+  }
+}
