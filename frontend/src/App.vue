@@ -246,6 +246,60 @@
                       ✅ 已保存为记录 #{{ currentRecordId }}
                     </span>
                   </div>
+                  <el-collapse
+                    v-if="citations.length || invalidCitations.length"
+                    style="margin-top: 16px;"
+                  >
+                    <el-collapse-item name="citations">
+                      <template #title>
+                        <span style="font-weight: 600;">📚 参考法条（{{ citations.length }}）</span>
+                        <el-tag
+                          v-if="invalidCitations.length"
+                          type="warning"
+                          size="small"
+                          style="margin-left: 8px;"
+                        >
+                          {{ invalidCitations.length }} 处引用未在本地语料中找到
+                        </el-tag>
+                      </template>
+                      <el-alert
+                        v-if="invalidCitations.length"
+                        type="warning"
+                        :closable="false"
+                        style="margin-bottom: 12px;"
+                        title="以下引用无法在本地法条库中验证，请人工核对"
+                      >
+                        <div v-for="(item, index) in invalidCitations" :key="index" style="font-size: 12px;">
+                          {{ item.raw }} —— {{ item.reason }}
+                        </div>
+                      </el-alert>
+                      <div
+                        v-for="(citation, index) in citations"
+                        :key="citation.id || index"
+                        class="citation-item"
+                      >
+                        <div class="citation-head">
+                          <span>
+                            [S{{ index + 1 }}] 《{{ citation.short_name || citation.law }}》{{ citation.article }}
+                            <span v-if="citation.book" class="citation-book">（{{ citation.book }}）</span>
+                          </span>
+                          <a
+                            v-if="citation.source_url"
+                            :href="citation.source_url"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >官方数据库 ↗</a>
+                        </div>
+                        <div class="citation-text">{{ citation.text }}</div>
+                        <div v-if="citation.effective_date" class="citation-meta">
+                          施行日期：{{ citation.effective_date }}
+                        </div>
+                      </div>
+                      <p class="citation-disclaimer">
+                        检索结果仅供辅助，条号存在不代表与本案事实匹配；请由专业人士复核。
+                      </p>
+                    </el-collapse-item>
+                  </el-collapse>
                 </el-card>
               </el-col>
             </el-row>
@@ -469,6 +523,11 @@ const selectedDocType = ref('')
 const generatedContent = ref('')
 const errorMsg = ref('')
 
+// 本次生成检索到的法条，以及「文内引用是否存在于本地语料」的校验结果
+const citations = ref([])
+const citationCheck = ref(null)
+const invalidCitations = computed(() => citationCheck.value?.invalid || [])
+
 // 当前生成结果对应的历史记录 id（游客 / 保存失败时为 null）
 const currentRecordId = ref(null)
 
@@ -592,6 +651,8 @@ async function generateDoc() {
 
   isLoading.value = true
   generatedContent.value = ''  // 清空旧内容，准备流式追加
+  citations.value = []
+  citationCheck.value = null
   currentRecordId.value = null
   isEditingGenerated.value = false
   editingContent.value = ''
@@ -654,6 +715,8 @@ async function generateDoc() {
             } else if (event.type === 'done') {
               // 后端保存后会把记录 id 一起带回来，供「编辑 → 保存」使用
               currentRecordId.value = event.record_id || null
+              citations.value = Array.isArray(event.citations) ? event.citations : []
+              citationCheck.value = event.citation_check || null
               // 生成完成，刷新历史记录
               await loadHistory()
             } else if (event.type === 'error') {
@@ -1024,5 +1087,58 @@ function formatFields(inputFields) {
   background: linear-gradient(135deg, #10b981 0%, #059669 100%);
   border: none;
   border-radius: 6px;
+}
+
+.citation-item {
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+}
+
+.citation-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.citation-head a {
+  flex-shrink: 0;
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 400;
+  text-decoration: none;
+}
+
+.citation-book {
+  color: #64748b;
+  font-weight: 400;
+}
+
+.citation-text {
+  margin-top: 6px;
+  max-height: 120px;
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 1.7;
+  color: #475569;
+  white-space: pre-wrap;
+}
+
+.citation-meta {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.citation-disclaimer {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #94a3b8;
 }
 </style>
