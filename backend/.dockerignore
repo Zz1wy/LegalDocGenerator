@@ -21,6 +21,11 @@ __pycache__/
 .idea/
 *.swp
 
+# 运行期生成的向量索引：必须在容器启动时重建，不能把宿主机缓存打进镜像
+# （镜像里带旧元数据会让启动逻辑误判「知识库已是最新」，而数据卷实际为空）
+rag/chroma_db/
+rag/index_meta.json
+
 # 测试
 tests/
 test_*.py

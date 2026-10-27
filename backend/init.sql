@@ -7,6 +7,11 @@
 --
 -- 注意：已有 mysql_data 数据卷时，入口脚本不会再次创建用户；需要手动迁移或重建卷。
 
+-- 显式声明脚本编码。MySQL 官方镜像导入 init.sql 时，客户端默认字符集
+-- 不一定是 utf8mb4；不写这一行，下面的中文模板名会被按 latin1 解释，
+-- 再以 utf8mb4 存储，形成「劳动合同 → åŠ³åŠ¨åˆåŒ」的乱码。
+SET NAMES utf8mb4;
+
 CREATE TABLE IF NOT EXISTS users (
     id INT AUTO_INCREMENT PRIMARY KEY,
     username VARCHAR(50) UNIQUE NOT NULL,

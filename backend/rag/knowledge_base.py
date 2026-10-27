@@ -42,7 +42,10 @@ except ImportError:  # pragma: no cover
 # ==================== 配置 ====================
 
 CHROMA_DB_DIR = Path(os.getenv("CHROMA_DB_DIR", str(Path(__file__).parent / "chroma_db")))
-INDEX_META_PATH = Path(__file__).parent / "index_meta.json"
+# 元数据必须跟向量库放在同一个目录：Docker 里 chroma_db 是持久化卷，
+# 而代码目录是镜像层。若元数据留在代码目录，重建容器后会出现
+# 「元数据存在、向量库为空」的假命中，启动时跳过重建。
+INDEX_META_PATH = CHROMA_DB_DIR / "index_meta.json"
 COLLECTION_NAME = "legal_knowledge"
 INDEX_VERSION = 2
 
@@ -180,9 +183,28 @@ def _read_index_meta() -> dict:
 
 
 def _write_index_meta(meta: dict) -> None:
+    INDEX_META_PATH.parent.mkdir(parents=True, exist_ok=True)
     INDEX_META_PATH.write_text(
         json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+
+
+def _stored_chunk_count() -> int:
+    """实际写入 Chroma 的向量数；读不到时返回 0。
+
+    只检查 INDEX_META_PATH 是否存在不够：Docker 首次挂载空数据卷、
+    卷被误删、或镜像里带了旧元数据时，都会出现「元数据在、向量库空」
+    的情况，此时必须重建，而不是跳过。
+    """
+    if not CHROMA_DB_DIR.exists():
+        return 0
+    try:
+        import chromadb
+
+        client = chromadb.PersistentClient(path=str(CHROMA_DB_DIR))
+        return client.get_collection(COLLECTION_NAME).count()
+    except Exception:
+        return 0
 
 
 def _chroma_metadata(chunk: dict) -> dict:
@@ -237,7 +259,7 @@ def build_knowledge_base(force_rebuild: bool = False) -> tuple[bool, int]:
         not force_rebuild
         and meta.get("checksum") == checksum
         and meta.get("count") == len(chunks)
-        and CHROMA_DB_DIR.exists()
+        and _stored_chunk_count() == len(chunks)
     ):
         print(f"✅ 知识库已是最新，共 {len(chunks)} 个块（跳过重建）")
         return True, len(chunks)
