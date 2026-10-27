@@ -19,11 +19,19 @@ CREATE TABLE IF NOT EXISTS generated_records (
     id INT AUTO_INCREMENT PRIMARY KEY,
     doc_type VARCHAR(50) NOT NULL,
     input_fields JSON,
-    generated_content TEXT,
+    -- API 允许 200k 字符；TEXT 只有 64KB，长文书会保存失败
+    generated_content MEDIUMTEXT,
     user_id INT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+    -- 历史记录固定按 user_id 过滤 + created_at 倒序
+    INDEX idx_user_created (user_id, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 已有数据库升级（新建库无需执行）：
+-- ALTER TABLE generated_records
+--   MODIFY generated_content MEDIUMTEXT,
+--   ADD INDEX idx_user_created (user_id, created_at);
 
 -- 文书模板表（用于 /api/doc-types 动态读取）
 CREATE TABLE IF NOT EXISTS document_templates (
