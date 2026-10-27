@@ -63,6 +63,26 @@ def test_extract_citations():
     assert len(citations) == 3
 
 
+def test_extract_citations_expands_article_enumeration():
+    text = (
+        "根据《民事诉讼法》第一百二十二条、第五十四条、第二百八十五条"
+        "以及《公司法》第十二条，提起诉讼。"
+    )
+    citations = extract_citations(text)
+    assert [(item["law"], item["article"]) for item in citations] == [
+        ("民事诉讼法", "第一百二十二条"),
+        ("民事诉讼法", "第五十四条"),
+        ("民事诉讼法", "第二百八十五条"),
+        ("公司法", "第十二条"),
+    ]
+
+
+def test_extract_citations_expands_and_separator_but_stops_at_plain_text():
+    text = "《民法典》第五百八十五条和第五百八十六条，当事人可以约定违约金。"
+    citations = extract_citations(text)
+    assert [item["article"] for item in citations] == ["第五百八十五条", "第五百八十六条"]
+
+
 def test_extract_citations_ignores_plain_text_and_bad_names():
     assert extract_citations("第八十七条") == []
     assert extract_citations("《劳动法》") == []

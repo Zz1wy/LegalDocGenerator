@@ -19,6 +19,13 @@ _CITATION_RE = re.compile(
     r"《\s*([^》\n]{2,40}?)\s*》\s*(第[一二三四五六七八九十百千万零〇两0-9]+条(?:之[一二三四五六七八九十]+)?)"
 )
 
+# 同一法名后的枚举写法：「《民事诉讼法》第一百二十二条、第五十四条、第二百八十五条」
+# 只有紧跟在顿号/和/及/以及之后的「第X条」才归入同一部法律，避免把普通正文当成引用。
+_ARTICLE_LIST_RE = re.compile(
+    r"(?:\s*(?:以及|[、,，和及])\s*)"
+    r"(第[一二三四五六七八九十百千万零〇两0-9]+条(?:之[一二三四五六七八九十]+)?)"
+)
+
 # 常见简称/别名 → 语料里的规范简称
 _LAW_ALIASES = {
     "民法典": "民法典",
@@ -59,24 +66,44 @@ def citation_key(law: str, article: str) -> tuple[str, int, str]:
 
 
 def extract_citations(text: str) -> list[dict]:
-    """从生成文本中抽取所有显式法条引用，去重并保持出现顺序。"""
+    """从生成文本中抽取所有显式法条引用，去重并保持出现顺序。
+
+    除了完整的《法名》第X条，也支持同一法名后的枚举：
+    「《民事诉讼法》第一百二十二条、第五十四条、第二百八十五条」
+    会被抽成三条，均归入《民事诉讼法》。法律文书里这种写法很常见，
+    只抓第一条会让「引用可追溯率」被低估。
+    """
+    text = text or ""
     seen: set[tuple[str, int, str]] = set()
     found: list[dict] = []
-    for match in _CITATION_RE.finditer(text or ""):
-        law_raw, article = match.group(1), match.group(2)
-        law = normalize_law_name(law_raw)
+
+    def add(law: str, article: str, raw: str) -> None:
         key = citation_key(law, article)
         if key in seen:
-            continue
+            return
         seen.add(key)
         number, suffix = normalize_article(article)
         found.append({
-            "raw": match.group(0),
+            "raw": raw,
             "law": law,
             "article": article,
             "article_num": number,
             "suffix": suffix,
         })
+
+    for match in _CITATION_RE.finditer(text):
+        law = normalize_law_name(match.group(1))
+        add(law, match.group(2), match.group(0))
+
+        # 继续吃掉紧跟其后的「、第Y条」，直到遇到另一部法律或普通正文
+        position = match.end()
+        while True:
+            extra = _ARTICLE_LIST_RE.match(text, position)
+            if extra is None:
+                break
+            add(law, extra.group(1), extra.group(0).strip())
+            position = extra.end()
+
     return found
 
 
