@@ -49,11 +49,29 @@ Out of scope:
 - **PyJWT** is used for JWT signing/verification. `python-jose` was removed
   because version 3.5.0 has an unresolved algorithm-confusion advisory and no
   fixed release.
-- **ChromaDB 1.5.9** is pinned as the current latest release. OSV still lists
-  advisories affecting its server/auth/multi-tenant paths. This project uses
-  Chroma only through an embedded local `PersistentClient`; it does not start
-  Chroma's HTTP server and does not expose a Chroma port. Do not enable Chroma
-  server mode without reviewing those advisories.
+- **ChromaDB 1.5.9** is pinned as the current latest release (checked
+  2026-10-27). Dependabot's 8 alerts all resolve to four advisories on
+  Chroma's server/auth paths:
+
+  | Advisory | Path affected upstream | Reachable here? |
+  |---|---|---|
+  | CVE-2026-45829 (critical) | Pre-auth code execution via `POST /api/v2/tenants/.../collections` | No — no Chroma HTTP server is started |
+  | CVE-2026-45833 (critical) | Code execution via collection update with a malicious model repo + `trust_remote_code` | No — no server, and the app never updates collections from user input |
+  | CVE-2026-45830 (high) | Any authenticated user can access other tenants' collections | No — one embedded local store, no tenants or remote clients |
+  | CVE-2026-45831 (high) | `SimpleRBACAuthorizationProvider` does not scope permissions to tenant/database/collection | No — no RBAC provider is configured |
+
+  The project uses Chroma only through `langchain_community.vectorstores.Chroma`
+  with a local `persist_directory` (embedded `PersistentClient`). There is no
+  Chroma service in `docker-compose.yml`, no Chroma port is exposed, and no
+  endpoint lets a caller create/update collections or supply a model
+  repository. ChromaDB 1.5.9 is the latest release and is listed as
+  `last_affected`, so no fixed version exists yet.
+
+  Handling: keep the alerts visible rather than silencing them in
+  `.github/dependabot.yml`; dismiss them in GitHub as "Vulnerable code is not
+  used" with a link to this section. Re-evaluate on every ChromaDB upgrade and
+  **before** enabling Chroma server mode, remote clients, or multi-user
+  collection writes.
 - Frontend CI runs `npm audit --omit=dev --audit-level=high` (currently zero
   high-severity findings). Dependabot monitors npm, pip, and GitHub Actions
   dependencies for updates.

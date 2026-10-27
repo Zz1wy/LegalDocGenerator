@@ -141,6 +141,31 @@ docker-compose ps
 >
 > 首次初始化时，MySQL 官方镜像会根据 `MYSQL_USER` / `MYSQL_PASSWORD` 创建应用账号并只授权 `DB_NAME` 数据库。**如果已有旧的 `mysql_data` 数据卷，入口脚本不会再次创建用户**；需要手动创建 `legal_app` 账号，或重建数据卷（会丢失已有数据）。
 
+### Docker 部署验证（2026-10-27，本机实测）
+
+在**空数据卷**上冷启动整套服务，验证结果：
+
+| 检查项 | 结果 |
+|---|---|
+| MySQL 初始化 | `init.sql` 建出 3 张表；`legal_app` 只能访问业务库 |
+| Chroma 首次构建 | 空卷启动时重建 1,984 个法条块；重启后复用索引，约 9 s 恢复健康 |
+| 前端 / 反向代理 | `/` 返回 200；`/health` 经 Nginx 转发返回 200 |
+| 注册 → 登录 | 200，JWT 可正常使用 |
+| 生成（劳动合同） | 200，45.6 s，1,514 字，返回 5 条参考法条 |
+| 历史持久化 | 重启 backend 后仍有 2 条记录，用户数据未丢 |
+| SSE 流式输出 | `text/event-stream`；首片段 0.66 s，344 个事件，17.5 s 完成；`done` 事件带引用与校验结果（4/4 可追溯） |
+| 鉴权失败 | 无 token / 伪造 token 均返回 401，不会静默降级为游客 |
+| fail-closed | 缺少 `SECRET_KEY` / `DB_*` 时 `docker compose config` 直接报错 |
+| 端口暴露 | MySQL、后端只绑 `127.0.0.1`；前端 80 端口对外 |
+
+验证中发现并修复了两个**只在 Docker 冷启动时才会暴露**的问题：
+
+1. **索引元数据放在镜像层**：新 clone 的仓库没有 `rag/chroma_db`，但 `rag/index_meta.json` 会被打进镜像；空数据卷 + 旧元数据会让启动逻辑误判“知识库已是最新”而跳过重建。现在元数据放进 Chroma 数据卷，并校验实际 collection 数量；`.dockerignore` 也排除了宿主机索引。
+2. **`init.sql` 未声明字符集**：MySQL 入口脚本按默认客户端字符集导入时，中文模板名会双重编码成 `åŠ³åŠ¨åˆåŒ`。已在脚本开头加 `SET NAMES utf8mb4;`，并重新验证 9 种文书类型名称正常。
+
+> 本机 MySQL 已占用 3306，验证时用临时 override 把容器端口映射到 13306；仓库里的 `docker-compose.yml` 未改。
+> 国内网络下 Docker Hub 直连可能超时，可先从 `docker.m.daocloud.io/library/<镜像>` 拉取并重新 tag 成标准名称；本次后端构建还临时指定了清华 PyPI 源，仓库默认仍使用官方 PyPI。
+
 ## 📁 项目结构
 
 ```
@@ -327,6 +352,8 @@ python -m evaluation.run_generation_eval --rescore evaluation/reports/generation
 - **检索存在文书类型盲区**：房屋买卖合同这类查询仍会召回租赁/物权条文，期望的买卖合同条文未进 Top-5；需要按 `doc_type` 做检索过滤或扩充查询扩展，而不是只看总体 Recall。
 - **重排默认关闭**：本地 7B 模型单次重排约 2.2 s，且受候选池限制；更大候选池需要更长上下文或更强的重排模型。
 - **法条正文尚未逐条对照官方数据库**：来源与版本已记录在 [SOURCES.md](SOURCES.md)，真实业务使用前仍需逐条核对。
+- **ChromaDB 上游告警依赖可达性判断**：1.5.9 是当前最新版，仍有 4 条针对服务端 API 的 RCE/跨租户越权告警（Dependabot 因两个依赖清单计为 8 条）。本项目只使用嵌入式 `PersistentClient`，不启动 Chroma HTTP 服务、不暴露端口，逐条可达性分析见 [SECURITY.md](SECURITY.md#known-dependency-advisories)；启用 Chroma 服务端模式前必须重新评估。
+- **依赖只有下界约束**：`requirements.txt` 多处使用 `>=`，全新 Docker 构建会解析到比本地 venv 更新的版本（本次 fastapi 0.162.0 / langchain 1.4.7）；本地测试与容器验证不是同一组版本，需要严格复现时应生成锁文件。
 - **工程侧**：同步 MySQL 调用只在文书保存处做了线程池卸载；登录/历史等链路仍可进一步 async 化；依赖版本可继续收紧。
 
 ## 📊 API 文档
@@ -450,6 +477,7 @@ document_templates   -- 文书模板表
 - [x] 支持文书在线编辑
 - [x] 添加 PDF 导出功能（浏览器打印 / 另存为 PDF）
 - [x] CI 自动化测试与构建
+- [x] Docker 冷启动端到端验证（初始化、健康检查、SSE、持久化）
 - [ ] 迁移到更强的中文 embedding（如 bge-m3）并重跑评测
 - [ ] 扩大金标集与语料范围，补充语义/时效性引用校验
 - [ ] 按文书类型约束检索范围，补齐房屋买卖等召回盲区
