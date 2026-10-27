@@ -117,7 +117,8 @@ class TestDocumentGeneration:
         async def boom(doc_type, fields):
             raise RuntimeError("internal-secret OLLAMA_HOST=http://10.0.0.5:11434")
 
-        monkeypatch.setattr("main.generate_with_ai", boom)
+        # 端点现在走 detailed 版本（同时返回检索结果/引用），异常仍不应外泄。
+        monkeypatch.setattr("main.generate_with_ai_detailed", boom)
         response = client.post("/api/generate", json={
             "doc_type": "借条",
             "fields": {"lender": "张三", "borrower": "李四", "amount": "10000"}
@@ -137,6 +138,9 @@ class TestDocumentGeneration:
         assert response.status_code == 200
         # 前端需要 record_id 才能对结果做「在线编辑 → 保存」
         assert response.json()["record_id"] == 1
+        # 前端要根据 citations 展示参考法条；RAG 关闭时也必须是空列表
+        assert response.json()["citations"] == []
+        assert "citation_check" in response.json()
         # 确认真的执行了 INSERT（而不是只把 id 编出来）
         sql = mock_cursor.execute.call_args[0][0]
         assert "INSERT INTO generated_records" in sql
@@ -166,6 +170,9 @@ class TestDocumentGeneration:
         assert "测试公司" in body
         assert '"type": "done"' in body
         assert '"record_id": 1' in body
+        # done 事件必须带引用字段，前端无需再发一次请求
+        assert '"citations": []' in body
+        assert '"citation_check"' in body
         sql = mock_cursor.execute.call_args[0][0]
         assert "INSERT INTO generated_records" in sql
 

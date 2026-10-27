@@ -6,6 +6,7 @@ from typing import List, Optional
 import os
 import json
 import time
+import asyncio
 import ipaddress
 import httpx
 from dotenv import load_dotenv
@@ -16,10 +17,17 @@ from datetime import datetime, timedelta, timezone
 from passlib.context import CryptContext
 import hashlib
 
+# LLM Provider：Ollama / OpenAI 兼容 API 可切换
+from llm import get_llm_client, get_model_name
+
 # RAG 模块导入（带优雅降级：如果没有安装相关依赖，RAG 功能自动禁用）
 try:
     from rag.knowledge_base import build_knowledge_base, get_knowledge_base_stats
-    from rag.retriever import retrieve_simple
+    from rag.retriever import (
+        aretrieve as rag_aretrieve,
+        retrieve as rag_retrieve,
+    )
+    from rag.citations import verify_citations
     RAG_AVAILABLE = True
 except ImportError as e:
     RAG_AVAILABLE = False
@@ -399,61 +407,31 @@ async def get_current_user(current_user: Optional[dict] = Depends(get_optional_u
         raise HTTPException(status_code=401, detail="未提供认证凭据")
     return current_user
 
-# ==================== Ollama 配置 ====================
+# ==================== LLM 配置 ====================
 
+# 兼容旧配置：Provider 层会优先读 OLLAMA_HOST
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 
+
 async def call_ollama(prompt: str) -> str:
-    """调用 Ollama 大语言模型"""
+    """调用当前配置的 LLM Provider（默认 Ollama）。
+
+    函数名保留是为了兼容现有测试与调用点；实际由 llm.factory 决定
+    走本地 Ollama 还是 OpenAI 兼容 API。
+    """
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(
-                f"{OLLAMA_HOST}/api/generate",
-                json={
-                    "model": "qwen2.5:7b",
-                    "prompt": prompt,
-                    "stream": False
-                }
-            )
-            if response.status_code == 200:
-                return response.json().get("response", "")
-            else:
-                raise Exception(f"Ollama 返回错误: {response.status_code}")
+        result = await get_llm_client().generate(prompt)
+        return result.text
     except Exception as e:
         raise Exception(f"调用大模型失败: {str(e)}")
 
-async def stream_ollama(prompt: str):
-    """
-    流式调用 Ollama，yield 每个生成的文本片段
 
-    实现原理：
-    Ollama 的 /api/generate 接口支持 stream=True，开启后以 NDJSON 格式
-    （每行一个 JSON 对象）逐 token 返回响应。
-    用 httpx 的 stream 模式读取响应体，逐行解析 JSON 并 yield response 字段。
-    """
+async def stream_ollama(prompt: str):
+    """流式调用当前 LLM Provider，逐片段 yield 文本。"""
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            async with client.stream(
-                "POST",
-                f"{OLLAMA_HOST}/api/generate",
-                json={
-                    "model": "qwen2.5:7b",
-                    "prompt": prompt,
-                    "stream": True
-                }
-            ) as response:
-                if response.status_code != 200:
-                    raise Exception(f"Ollama 返回错误: {response.status_code}")
-                # Ollama 流式返回为 NDJSON，每行一个 JSON，逐行解析
-                async for line in response.aiter_lines():
-                    if line:
-                        try:
-                            data = json.loads(line)
-                            chunk = data.get("response", "")
-                            if chunk:
-                                yield chunk
-                        except json.JSONDecodeError:
-                            continue
+        async for chunk in get_llm_client().stream(prompt):
+            if chunk:
+                yield chunk
     except Exception as e:
         raise Exception(f"调用大模型失败: {str(e)}")
 
@@ -546,55 +524,109 @@ def build_prompt(doc_type: str, fields: dict) -> str:
 
     return templates.get(doc_type, f"请生成一份{doc_type}，包含以下信息：{field_str}")
 
-def build_prompt_with_rag(doc_type: str, fields: dict) -> str:
-    """
-    RAG 增强版 Prompt 构建
+def _augment_with_rag(base_prompt: str, retrieval: dict) -> str:
+    """把检索到的「可引用条文」拼进 Prompt。"""
+    rag_context = retrieval.get("combined") or ""
+    if not rag_context:
+        return base_prompt
 
-    与基础版 build_prompt 的区别：
-    1. 先从法律知识库检索相关条文和模板
-    2. 将检索结果拼接到 Prompt 中
-    3. 提示 LLM 只引用检索到的条文，不确定时标注待核实
-
-    如果 RAG 不可用或检索失败，自动回退到基础版 build_prompt
-    """
-    # 先生成基础 Prompt
-    base_prompt = build_prompt(doc_type, fields)
-
-    # 尝试 RAG 增强
-    if RAG_AVAILABLE:
-        try:
-            rag_context = retrieve_simple(doc_type, fields)
-            if rag_context:
-                # 在基础 Prompt 前面插入法律参考，在后面追加引用要求
-                enhanced = f"""{base_prompt}
+    return f"""{base_prompt}
 
 {rag_context}
 
 【重要要求】
-请参考上述法律条文内容生成文书，并遵守：
-1. 只引用你能确认的条文；不确定时不要编造条号或原文，用【待核实】标注
-2. 文书条款应与检索内容一致，不要声称已经过法律审查
-3. 在必要时注明所依据的法律条款编号，供人工复核"""
-                return enhanced
+请严格依据上述可引用条文生成文书：
+1. 只能引用上面列出的条文，未列出的条号不要编造；
+2. 引用时优先使用 [S1] 这样的来源编号，也可以写《法名》第X条；
+3. 法条内容不确定时标注【待核实】，不要用肯定语气虚构法律依据；
+4. 不要声称文书已经过法律审查。"""
+
+
+def _empty_retrieval() -> dict:
+    return {
+        "legal_refs": [],
+        "template_refs": [],
+        "citations": [],
+        "combined": "",
+        "retrieval": {"config": "fallback", "count": 0},
+    }
+
+
+def build_prompt_with_rag_detailed(doc_type: str, fields: dict) -> tuple[str, dict]:
+    """同步版 RAG Prompt 构建，返回 (prompt, 检索结果)。
+
+    保留同步接口是为了兼容现有测试；应用主链路使用 async 版本，
+    把 embedding/Chroma 的阻塞调用放到线程池里。
+    """
+    base_prompt = build_prompt(doc_type, fields)
+    if RAG_AVAILABLE:
+        try:
+            retrieval = rag_retrieve(doc_type, fields)
+            return _augment_with_rag(base_prompt, retrieval), retrieval
         except Exception as e:
             print(f"⚠️ RAG 检索失败，使用基础 Prompt: {e}")
+    return base_prompt, _empty_retrieval()
 
-    return base_prompt
+
+def build_prompt_with_rag(doc_type: str, fields: dict) -> str:
+    """兼容旧接口：只返回 Prompt 字符串。"""
+    return build_prompt_with_rag_detailed(doc_type, fields)[0]
+
+
+async def build_prompt_with_rag_async(doc_type: str, fields: dict) -> tuple[str, dict]:
+    """异步版：检索放到线程池，可选 LLM 重排。"""
+    base_prompt = build_prompt(doc_type, fields)
+    if RAG_AVAILABLE:
+        try:
+            retrieval = await rag_aretrieve(doc_type, fields)
+            return _augment_with_rag(base_prompt, retrieval), retrieval
+        except Exception as e:
+            print(f"⚠️ RAG 检索失败，使用基础 Prompt: {e}")
+    return base_prompt, _empty_retrieval()
+
+
+def build_citation_payload(retrieval: dict, content: str) -> dict:
+    """构造响应里的引用列表与「引用落地」校验结果。"""
+    payload = {"citations": retrieval.get("citations") or []}
+    if not RAG_AVAILABLE:
+        payload["citation_check"] = {"valid": [], "invalid": [], "checked": 0}
+        return payload
+
+    try:
+        from rag.indexer import get_retrieval_index
+
+        chunks = get_retrieval_index().chunks
+        payload["citation_check"] = verify_citations(content, chunks)
+    except Exception as e:
+        print(f"⚠️ 引用校验失败: {e}")
+        payload["citation_check"] = {
+            "valid": [], "invalid": [], "checked": 0, "error": "引用校验不可用",
+        }
+    return payload
+
+
+async def generate_with_ai_detailed(doc_type: str, fields: dict) -> tuple[str, dict]:
+    """生成文书并返回 (内容, 检索结果)。"""
+    prompt, retrieval = await build_prompt_with_rag_async(doc_type, fields)
+    content = await call_ollama(prompt)
+    return content, retrieval
+
 
 async def generate_with_ai(doc_type: str, fields: dict) -> str:
-    """使用大语言模型生成文书（自动使用 RAG 增强）"""
-    prompt = build_prompt_with_rag(doc_type, fields)
-    return await call_ollama(prompt)
+    """兼容旧接口：只返回生成内容。"""
+    content, _ = await generate_with_ai_detailed(doc_type, fields)
+    return content
+
 
 async def generate_with_ai_stream(doc_type: str, fields: dict):
     """
-    流式生成文书，yield 每个文本片段
+    流式生成文书，yield 每个文本片段。
 
-    与 generate_with_ai 的区别：
-    - generate_with_ai：等待完整响应后一次性返回字符串
-    - generate_with_ai_stream：边生成边 yield，支持 SSE 流式推送
+    端点需要在流结束后拿到检索结果，因此主链路会直接调用
+    build_prompt_with_rag_async + stream_ollama；这个函数保留给
+    旧调用方/测试使用。
     """
-    prompt = build_prompt_with_rag(doc_type, fields)
+    prompt, _ = await build_prompt_with_rag_async(doc_type, fields)
     async for chunk in stream_ollama(prompt):
         yield chunk
 
@@ -699,18 +731,25 @@ async def generate_document(
         if not has_values:
             return {"success": False, "content": "", "message": "请填写至少一个字段"}
 
-        content = await generate_with_ai(request.doc_type, request.fields)
+        content, retrieval = await generate_with_ai_detailed(request.doc_type, request.fields)
 
         # 只有登录用户才落库。没有归属的记录一旦写进表里，要么对所有人可见
         # （这就是之前的越权漏洞），要么变成无人认领的垃圾数据，两种都不合适。
         record_id = None
         if current_user is not None:
             from database import save_generated_record_with_user
-            record_id = save_generated_record_with_user(
-                request.doc_type, request.fields, content, current_user["id"]
+            # 同步 DB 调用放到线程池，避免阻塞事件循环
+            record_id = await asyncio.to_thread(
+                save_generated_record_with_user,
+                request.doc_type, request.fields, content, current_user["id"],
             )
 
-        return {"success": True, "content": content, "record_id": record_id}
+        return {
+            "success": True,
+            "content": content,
+            "record_id": record_id,
+            **build_citation_payload(retrieval, content),
+        }
     except Exception as e:
         # 详细异常只写服务端日志，不把内部地址/堆栈返回给客户端。
         print(f"⚠️ 文书生成失败: {e}")
@@ -742,8 +781,13 @@ async def generate_document_stream(
         """SSE 事件生成器：流式推送文本片段，结束后保存到数据库"""
         full_content = ""
         try:
+            # 先完成检索（此处可能触发 LLM 重排），再开始流式生成
+            prompt, retrieval = await build_prompt_with_rag_async(
+                request.doc_type, request.fields
+            )
+
             # 流式接收每个 token，拼接完整内容并推送
-            async for chunk in generate_with_ai_stream(request.doc_type, request.fields):
+            async for chunk in stream_ollama(prompt):
                 full_content += chunk
                 yield f"data: {json.dumps({'type': 'content', 'text': chunk}, ensure_ascii=False)}\n\n"
 
@@ -751,12 +795,18 @@ async def generate_document_stream(
             record_id = None
             if current_user is not None:
                 from database import save_generated_record_with_user
-                record_id = save_generated_record_with_user(
-                    request.doc_type, request.fields, full_content, current_user["id"]
+                record_id = await asyncio.to_thread(
+                    save_generated_record_with_user,
+                    request.doc_type, request.fields, full_content, current_user["id"],
                 )
 
-            # 推送完成事件。带上 record_id，前端后续「在线编辑 → 保存」才有目标。
-            yield f"data: {json.dumps({'type': 'done', 'record_id': record_id}, ensure_ascii=False)}\n\n"
+            # 推送完成事件。带上 record_id 与引用，前端据此展示「参考法条」。
+            done_event = {
+                "type": "done",
+                "record_id": record_id,
+                **build_citation_payload(retrieval, full_content),
+            }
+            yield f"data: {json.dumps(done_event, ensure_ascii=False)}\n\n"
         except Exception as e:
             # 详细异常只写服务端日志，不把内部地址/堆栈返回给客户端。
             print(f"⚠️ 流式文书生成失败: {e}")
@@ -834,7 +884,11 @@ async def health_check():
     return {
         "status": "ok",
         "message": "服务运行正常",
-        "rag": rag_status
+        "rag": rag_status,
+        "llm": {
+            "provider": os.getenv("LLM_PROVIDER", "ollama"),
+            "model": get_model_name(),
+        },
     }
 
 # ==================== 知识库管理 API ====================
@@ -863,6 +917,10 @@ async def reload_knowledge(current_user: dict = Depends(get_current_user)):
         return {"success": False, "message": "RAG 模块未安装"}
 
     success, count = build_knowledge_base(force_rebuild=True)
+    if success:
+        # 清空进程内缓存的索引，下一次检索会重新加载
+        from rag.indexer import reset_retrieval_index
+        reset_retrieval_index()
     return {"success": success, "total_chunks": count, "message": f"知识库已重建，共 {count} 个文本块"}
 
 # ==================== 启动事件 ====================

@@ -80,6 +80,18 @@ services:
       - DB_PASSWORD=${DB_PASSWORD:?DB_PASSWORD 未设置，请在项目根目录的 .env 中配置}
       - DB_NAME=${DB_NAME:-legal_doc_db}
       - OLLAMA_HOST=http://ollama:11434
+      # LLM Provider：ollama（本地）或 openai（任意 OpenAI 兼容云 API）。
+      # 云 API 还需要 LLM_BASE_URL / LLM_API_KEY；默认仍是完全本地的 Ollama。
+      - LLM_PROVIDER=${LLM_PROVIDER:-ollama}
+      - LLM_MODEL=${LLM_MODEL:-qwen2.5:7b}
+      - LLM_BASE_URL=${LLM_BASE_URL:-}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_TIMEOUT=${LLM_TIMEOUT:-120}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
+      - RERANK_ENABLED=${RERANK_ENABLED:-false}
+      - RERANK_TIMEOUT=${RERANK_TIMEOUT:-20}
+      - HYBRID_BM25_WEIGHT=${HYBRID_BM25_WEIGHT:-2.0}
+      - HYBRID_BM25_GUARANTEE=${HYBRID_BM25_GUARANTEE:-4}
       # ⚠️ 故意不给默认值。以前这里写的是 ${SECRET_KEY:-change-me-in-production}，
       # 意味着没配环境变量时会**用一个人尽皆知的密钥静默上线**，任何人都能伪造
       # 任意用户的 JWT。现在用 :? 让 compose 直接报错退出（fail closed）。
