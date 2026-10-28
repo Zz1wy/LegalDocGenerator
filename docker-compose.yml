@@ -128,8 +128,10 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-      # 首次启动要构建 RAG 知识库（逐块向量化），给足冷启动时间
-      start_period: 180s
+      # 首次启动要构建 RAG 知识库（逐块向量化）。Ollama 容器没有 GPU 透传，
+      # bge-m3 会走 CPU；1,984 个法条块的耗时未在容器内实测，这里给 900s
+      # 保守上限，避免冷启动阶段就被判定为不健康。网络/CPU 更慢时可继续调大。
+      start_period: 900s
     restart: always
 
   # ==================== 5. 前端（含 Nginx） ====================

@@ -167,7 +167,7 @@ docker-compose ps
 
 > 本机 MySQL 已占用 3306，验证时用临时 override 把容器端口映射到 13306；仓库里的 `docker-compose.yml` 未改。
 > 国内网络下 Docker Hub 直连可能超时，可先从 `docker.m.daocloud.io/library/<镜像>` 拉取并重新 tag 成标准名称；本次后端构建还临时指定了清华 PyPI 源，仓库默认仍使用官方 PyPI。
-> 这次验证使用当时的默认 embedding `nomic-embed-text`。2026-10-28 起默认改为 `bge-m3`：`ollama-init` 会多拉取约 1.2 GB 模型，首次启动的知识库重建也会明显变慢；已验证的检索指标见下节。
+> 这次验证使用当时的默认 embedding `nomic-embed-text`。2026-10-28 默认改为 `bge-m3` 后，本机 Docker Hub 直连不可用、镜像源拉取 `ollama/ollama` 超时，**bge-m3 的容器内冷启动尚未实测**：`ollama-init` 会多拉取约 1.2 GB 模型，且 Ollama 容器没有 GPU 透传，索引重建走 CPU。作为保守加固，后端健康检查的 `start_period` 已从 180s 提到 900s；网络或 CPU 更慢时需继续调大。
 
 ## 📁 项目结构
 
@@ -494,7 +494,7 @@ document_templates   -- 文书模板表
 - [x] 支持文书在线编辑
 - [x] 添加 PDF 导出功能（浏览器打印 / 另存为 PDF）
 - [x] CI 自动化测试与构建
-- [x] Docker 冷启动端到端验证（初始化、健康检查、SSE、持久化）
+- [x] Docker 冷启动端到端验证（nomic 时期：初始化、健康检查、SSE、持久化；bge-m3 容器冷启动尚未实测）
 - [x] 迁移到 bge-m3 并重跑检索/生成评测（纯向量 Recall@5 41.6% → 96.1%）
 - [x] 按文书类型收窄检索范围（法名/分编/章节），补齐房屋买卖等召回盲区
 - [ ] 扩大金标集与语料范围，补充语义/时效性引用校验
