@@ -1,49 +1,61 @@
 {
   "gen_labor_01": {
+    "content_hash": "ef6b00f0640702b175c3356d2cabbd1cef26260225d32d8050a8002e688a2a2c",
     "citation_support": "no_citation",
     "notes": "标准劳动合同未写具体条号，只笼统提到《劳动合同法》。检索已命中第十九条（试用期上限），模型没有滥用，但也没有把试用期条款落到条文上。"
   },
   "gen_labor_02": {
+    "content_hash": "9171b3cb8c55247e35791ae159cf46ea78761e6174e8cc4eb046e5807501b3cd",
     "citation_support": "partial",
     "notes": "第四十七条确实规定经济补偿标准，但合同写「解除或终止时均应支付经济补偿」过度概括——是否补偿取决于第四十六条的情形。与本次重点更相关的第十九条（一年期合同试用期不得超过一个月）反而没有被引用。"
   },
   "gen_complaint_loan": {
+    "content_hash": "c3aa34ebc67066c2bd0b761818b3ba9fe09b3d5c5c6a2c45abef84f4391ddea5",
     "citation_support": "partial",
     "notes": "第一百二十二条作为起诉条件成立；但正文把第六百七十条（利息不得预先扣除）当作逾期还款的请求权基础，与案情不符，应引第六百七十五条/第六百七十六条。末尾罗列的第五十四条、第二百八十五条、第一百四十三条与本案无关。"
   },
   "gen_complaint_tort": {
+    "content_hash": "c0240e51afd0e18a281070b1244428c346667dd0e260338e55325b0259ebc3ee",
     "citation_support": "supported",
     "notes": "第一千一百七十九条直接对应医疗费、误工费、护理费、交通费等赔偿范围，事实与请求一致。"
   },
   "gen_iou_01": {
+    "content_hash": "3160851be0306495d9d05143cda57f054649113fcab751ecd6eb7ab9053916fc",
     "citation_support": "partial",
     "notes": "第六百七十一条、第六百七十八条与借款/展期勉强相关；第六百七十三条针对未按约定用途用款，借条未约定用途；《民事诉讼法》第一百一十八条是罚款、拘留的规定，与借条无关，模型自己也标了【待核实】。"
   },
   "gen_lease_01": {
+    "content_hash": "d24c6278102450e7cb9d59b6a08d01de360eb3f46014dee8191d2634708f31fc",
     "citation_support": "partial",
     "notes": "第七百零三条（租赁合同定义）、第七百一十三条（维修义务）与条款对应；第七百五十二条属于融资租赁合同，用在住宅租赁里是章错位。"
   },
   "gen_lease_02": {
+    "content_hash": "890e822738486dd5e9a895f7a5e169ee102f1a95d003292b14bb9d6782b2f856",
     "citation_support": "unsupported",
     "notes": "开头把第七百零三条、第七百三十五条、第七百五十八条和《公司法》第十二条并列为依据，其中第七百三十五条、第七百五十八条是融资租赁，第十二条是公司形式变更，均与商铺租赁无关；只有第七百零三条是相关的。"
   },
   "gen_divorce_01": {
+    "content_hash": "5c7773b728fbf08d10bc9d308bd5407657a266a03ca23b65e56ca65c08fce18f",
     "citation_support": "supported",
     "notes": "第一千零八十四条对应子女抚养，第一千零八十七条对应共同财产分割，与协议条款直接对应；缺第一千零七十六条（离婚协议应载明自愿离婚及协商结果），但不影响已引条文的正确性。"
   },
   "gen_equity_01": {
+    "content_hash": "a71350d20358ce8a12554b9ed6fafee369a98f0b625ec2bd2ff2fefd8c1cfe71",
     "citation_support": "partial",
     "notes": "第八十四条直接对应有限责任公司股权对外转让；但文末把自己列为依据的第八十五条（强制执行转让）、第二百条（公司债券转让）与本次协议无关，属于把检索上下文当成引用清单。"
   },
   "gen_nda_01": {
+    "content_hash": "63b174955df54ef459b98c925f3d628262e82305bf73110ef1602291bf1cab6a",
     "citation_support": "partial",
     "notes": "《劳动合同法》第二十三条直接支持保密与竞业限制约定；《民法典》第八百七十一条是技术转让合同的保密义务，用于劳动关系 NDA 属于类比而非直接依据。另把《保密协议模板》写成法律依据，措辞不严谨。"
   },
   "gen_house_sale_01": {
+    "content_hash": "8d9e3c4be0f3613db9a54943cbb798d8936a3554c315ee987c11b6a7d9f7ec8b",
     "citation_support": "no_citation",
     "notes": "检索没有命中买卖合同相关条文（返回的是承租人优先购买权、物权设立等），模型因此没有引用并注明「未引用具体条文」。这是检索失败，但模型没有编造，属于安全的失败方式。"
   },
   "gen_poa_01": {
+    "content_hash": "a3d350b5af2aae82fb3bbde63cef094f16e4681fc0b00f240279ca71d32435bc",
     "citation_support": "partial",
     "notes": "第九百一十九条（委托合同定义）、第九百二十九条（受托人过错赔偿）与协议内容对应；第九百二十五条、第九百二十六条是间接代理的披露规则，第九百三十六条是受托人死亡导致委托终止，均与本次一次性售房委托不完全匹配。"
   }

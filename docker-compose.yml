@@ -63,8 +63,8 @@ services:
         echo "正在下载 qwen2.5:7b 模型（可能需要几分钟）..."
         curl -X POST http://ollama:11434/api/pull -d '{"name": "qwen2.5:7b"}'
         echo "qwen2.5:7b 模型下载完成！"
-        echo "正在下载 nomic-embed-text 模型（用于 RAG 向量化）..."
-        curl -X POST http://ollama:11434/api/pull -d '{"name": "nomic-embed-text"}'
+        echo "正在下载 bge-m3 模型（用于中文法律 RAG 向量化，约 1.2 GB）..."
+        curl -X POST http://ollama:11434/api/pull -d '{"name": "bge-m3"}'
         echo "所有模型就绪！"
     restart: "no"
 
@@ -87,11 +87,12 @@ services:
       - LLM_BASE_URL=${LLM_BASE_URL:-}
       - LLM_API_KEY=${LLM_API_KEY:-}
       - LLM_TIMEOUT=${LLM_TIMEOUT:-120}
-      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-bge-m3}
+      - DOC_TYPE_SCOPE_ENABLED=${DOC_TYPE_SCOPE_ENABLED:-true}
       - RERANK_ENABLED=${RERANK_ENABLED:-false}
       - RERANK_TIMEOUT=${RERANK_TIMEOUT:-20}
-      - HYBRID_BM25_WEIGHT=${HYBRID_BM25_WEIGHT:-2.0}
-      - HYBRID_BM25_GUARANTEE=${HYBRID_BM25_GUARANTEE:-4}
+      - HYBRID_BM25_WEIGHT=${HYBRID_BM25_WEIGHT:-1.0}
+      - HYBRID_BM25_GUARANTEE=${HYBRID_BM25_GUARANTEE:-0}
       # ⚠️ 故意不给默认值。以前这里写的是 ${SECRET_KEY:-change-me-in-production}，
       # 意味着没配环境变量时会**用一个人尽皆知的密钥静默上线**，任何人都能伪造
       # 任意用户的 JWT。现在用 :? 让 compose 直接报错退出（fail closed）。

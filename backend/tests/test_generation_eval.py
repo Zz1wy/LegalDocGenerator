@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from evaluation.run_generation_eval import field_coverage, score_generation
+from evaluation.run_generation_eval import (
+    content_hash,
+    field_coverage,
+    filter_review,
+    score_generation,
+)
 from rag.citations import build_corpus_lookup
 
 
@@ -102,6 +107,31 @@ def test_no_citation_returns_none_rates():
     assert score["cited_total"] == 0
     assert score["traceability_rate"] is None
     assert score["grounding_rate"] is None
+
+
+def test_review_only_applies_to_the_same_generated_text():
+    results = [
+        {"id": "a", "content": "依据《劳动合同法》第十九条……"},
+        {"id": "b", "content": "重跑后文本不同"},
+        {"id": "c", "content": "没有人工复核记录"},
+    ]
+    review = {
+        "a": {
+            "content_hash": content_hash(results[0]["content"]),
+            "citation_support": "supported",
+            "notes": "对应",
+        },
+        "b": {
+            # 旧版复核文件没有 content_hash，或文本已变：都不能套用旧判断
+            "citation_support": "partial",
+            "notes": "旧文本的结论",
+        },
+    }
+
+    details, stale = filter_review(results, review)
+
+    assert list(details) == ["a"]
+    assert stale == 1
 
 
 def test_field_coverage_ignores_whitespace_and_long_text():

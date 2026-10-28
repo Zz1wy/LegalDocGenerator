@@ -47,7 +47,8 @@ CHROMA_DB_DIR = Path(os.getenv("CHROMA_DB_DIR", str(Path(__file__).parent / "chr
 # 「元数据存在、向量库为空」的假命中，启动时跳过重建。
 INDEX_META_PATH = CHROMA_DB_DIR / "index_meta.json"
 COLLECTION_NAME = "legal_knowledge"
-INDEX_VERSION = 2
+# v3：修复章节边界处的 chapter 元数据错位（每章最后一条被记到下一章）
+INDEX_VERSION = 3
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")

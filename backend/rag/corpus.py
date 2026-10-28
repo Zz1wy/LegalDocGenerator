@@ -199,6 +199,9 @@ def extract_articles(content: str) -> list[dict]:
     for line in content.splitlines():
         heading = HEADING_RE.match(line)
         if heading:
+            # 先结算上一条：章节标题出现在两条之间时，上一条仍属于旧章节。
+            # 若先更新 headings 再 flush，每条章节的「最后一条」都会被记到下一章。
+            flush()
             level = len(heading.group(1))
             title = heading.group(2).strip()
             if level > 1 and SECTION_RE.match(title):

@@ -9,13 +9,13 @@ from typing import Iterable, Optional
 from .indexer import RetrievalIndex, get_retrieval_index
 
 RRF_K = 60
-# 法律检索里「法名/条号/专业术语」的精确命中比语义相似更重要：
-# 向量通道在中文法律语料上召回偏弱时，RRF 的等权融合会把 BM25 第一名挤下去。
-# 这两个默认值来自 evaluation/ 的消融实验，可用环境变量调整。
-BM25_WEIGHT = float(os.getenv("HYBRID_BM25_WEIGHT", "2.0"))
-# Top-5 里保底 4 条 BM25：留 1 个名额给向量/RRF，既能保住精确命中，
-# 又不在 top_k 很小时把语义通道完全挤掉。该取值由 77 条金标消融得出。
-BM25_GUARANTEE = int(os.getenv("HYBRID_BM25_GUARANTEE", "4"))
+# 融合参数来自 77 条金标的消融实验，可用环境变量调整。
+# 历史上 nomic-embed-text 的中文向量召回很弱，需要「BM25 Top-4 保底」
+# 防止向量噪声把关键词第一名挤下去；换成 bge-m3 后纯向量 Recall@5
+# 从 0.40 升到 0.96，保底反而压低了排序质量，因此默认改为等权 RRF。
+# 旧策略仍可用 HYBRID_BM25_WEIGHT=2.0、HYBRID_BM25_GUARANTEE=4 复现。
+BM25_WEIGHT = float(os.getenv("HYBRID_BM25_WEIGHT", "1.0"))
+BM25_GUARANTEE = int(os.getenv("HYBRID_BM25_GUARANTEE", "0"))
 
 
 def rrf_fuse(
@@ -98,23 +98,25 @@ def hybrid_search(
     top_k: int = 5,
     candidate_k: int = 20,
     index: RetrievalIndex | None = None,
+    doc_type: str | None = None,
 ) -> list[dict]:
     """BM25 优先的混合检索。
 
     先保底 BM25 Top-N（法律术语/条号对精确匹配高度敏感），
     剩余名额按 weighted RRF 从两路候选中补齐。
     这样既不会丢掉 BM25 明确命中的条文，也保留向量召回的语义补充。
+    `doc_type` 非空时先按文书类型收窄检索范围（见 rag.scope）。
     """
     index = index or get_retrieval_index()
 
     dense: list[dict] = []
     sparse: list[dict] = []
     try:
-        dense = index.dense_search(query, k=candidate_k)
+        dense = index.dense_search(query, k=candidate_k, doc_type=doc_type)
     except Exception as exc:
         print(f"⚠️ 向量检索失败，降级为 BM25: {exc}")
     try:
-        sparse = index.bm25_search(query, k=candidate_k)
+        sparse = index.bm25_search(query, k=candidate_k, doc_type=doc_type)
     except Exception as exc:
         print(f"⚠️ BM25 检索失败，降级为向量检索: {exc}")
 
@@ -125,7 +127,8 @@ def dense_search(
     query: str,
     top_k: int = 5,
     index: RetrievalIndex | None = None,
+    doc_type: str | None = None,
 ) -> list[dict]:
     """消融实验用的纯向量基线。"""
     index = index or get_retrieval_index()
-    return index.dense_search(query, k=top_k)
+    return index.dense_search(query, k=top_k, doc_type=doc_type)

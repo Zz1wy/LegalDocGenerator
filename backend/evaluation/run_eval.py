@@ -158,19 +158,24 @@ async def evaluate(
             all_keys["bm25"][query_id] = chunks_to_keys(sparse, top_k)
             latencies["bm25"].append(bm25_ms)
 
-        if "hybrid-rrf" in configs:
-            # 对照组：等权 RRF、不做 BM25 保底，用来证明保底策略的必要性
-            rrf_started = time.perf_counter()
-            rrf_only = fuse_candidates(
-                dense, sparse, top_k=top_k, bm25_weight=1.0, bm25_guarantee=0
-            )
-            rrf_ms = (time.perf_counter() - rrf_started) * 1000
-            all_keys["hybrid-rrf"][query_id] = chunks_to_keys(rrf_only, top_k)
-            latencies["hybrid-rrf"].append(dense_ms + bm25_ms + rrf_ms)
-
         if "hybrid" in configs:
             all_keys["hybrid"][query_id] = chunks_to_keys(hybrid, top_k)
             latencies["hybrid"].append(retrieval_ms)
+
+        if "hybrid+scope" in configs:
+            # 默认融合 + 用金标里的 doc_type 收窄法名/分编/章节
+            scope_started = time.perf_counter()
+            doc_type = item.get("doc_type", "")
+            scoped_dense = index.dense_search(
+                query, k=candidate_k, doc_type=doc_type
+            )
+            scoped_sparse = index.bm25_search(
+                query, k=candidate_k, doc_type=doc_type
+            )
+            scoped = fuse_candidates(scoped_dense, scoped_sparse, top_k=top_k)
+            scope_ms = (time.perf_counter() - scope_started) * 1000
+            all_keys["hybrid+scope"][query_id] = chunks_to_keys(scoped, top_k)
+            latencies["hybrid+scope"].append(scope_ms)
 
         if "hybrid+rerank" in configs:
             rerank_started = time.perf_counter()
@@ -190,6 +195,7 @@ async def evaluate(
             if not set(keys) & relevant_per_query[query_id]:
                 failures[config].append({
                     "id": query_id,
+                    "doc_type": item.get("doc_type", ""),
                     "query": query,
                     "expected": sorted(relevant_per_query[query_id]),
                     "got": keys,
@@ -261,7 +267,8 @@ def render_markdown(result: dict) -> str:
         if not failures:
             lines.append("无。")
         for failure in failures[:10]:
-            lines.append(f"- `{failure['id']}`：{failure['query']}")
+            label = failure.get("doc_type") or "未分类"
+            lines.append(f"- `{failure['id']}`（{label}）：{failure['query']}")
             lines.append(f"  - 期望：{', '.join(failure['expected'])}")
             lines.append(f"  - 实际：{', '.join(failure['got'])}")
         lines.append("")
@@ -271,9 +278,10 @@ def render_markdown(result: dict) -> str:
         "",
         "- 指标按法条去重：同一法条被切成多个块时只计一次。",
         "- `dense` 是纯向量基线；`bm25` 是纯关键词基线。",
-        "- `hybrid-rrf` 是等权 RRF 对照；`hybrid` 先保底 BM25 Top-N，再用",
-        "  weighted RRF 从两路候选中补齐；`hybrid+rerank` 在融合候选上再做一次",
-        "  LLM 列表重排。",
+        "- `hybrid` 是默认配置（等权 RRF；旧 BM25 保底可用 "
+        "`HYBRID_BM25_WEIGHT=2.0`、`HYBRID_BM25_GUARANTEE=4` 复现）；",
+        "  `hybrid+scope` 在此基础上按金标的 doc_type 收窄法名/分编/章节；",
+        "  `hybrid+rerank` 在融合候选上再做一次 LLM 列表重排。",
         "- 延迟只包含检索/重排，不包含文书生成。",
         "- 数据集规模有限，指标用于版本间对比，不代表线上效果。",
     ])
@@ -285,8 +293,8 @@ def main() -> None:
     parser.add_argument("--golden", type=Path, default=DEFAULT_GOLDEN)
     parser.add_argument(
         "--configs",
-        default="dense,bm25,hybrid-rrf,hybrid,hybrid+rerank",
-        help="逗号分隔：dense,bm25,hybrid-rrf,hybrid,hybrid+rerank",
+        default="dense,bm25,hybrid,hybrid+scope,hybrid+rerank",
+        help="逗号分隔：dense,bm25,hybrid,hybrid+scope,hybrid+rerank",
     )
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--candidate-k", type=int, default=20)
@@ -306,7 +314,7 @@ def main() -> None:
     print(f"✅ 金标校验通过：{len(golden)} 条查询，所有标注法条均存在")
 
     configs = [item.strip() for item in args.configs.split(",") if item.strip()]
-    allowed = {"dense", "bm25", "hybrid-rrf", "hybrid", "hybrid+rerank"}
+    allowed = {"dense", "bm25", "hybrid", "hybrid+scope", "hybrid+rerank"}
     unknown = set(configs) - allowed
     if unknown:
         raise SystemExit(f"未知配置: {unknown}，可选 {allowed}")

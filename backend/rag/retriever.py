@@ -23,6 +23,11 @@ from .query import expand_query
 TOP_K = 5
 CANDIDATE_K = 20
 
+# 按文书类型收窄检索范围；评测里可用 DOC_TYPE_SCOPE_ENABLED=false 复现未过滤基线。
+DOC_TYPE_SCOPE_ENABLED = os.getenv(
+    "DOC_TYPE_SCOPE_ENABLED", "true"
+).lower() in ("1", "true", "yes", "on")
+
 # 字段名中英文映射（让查询更自然）
 FIELD_LABELS = {
     "party_a": "甲方", "party_b": "乙方", "term": "期限", "salary": "工资",
@@ -100,7 +105,9 @@ def _fallback_result(doc_type: str, reason: str = "") -> dict:
     }
 
 
-def _build_result(chunks: list[dict], query: str, config: str) -> dict:
+def _build_result(
+    chunks: list[dict], query: str, config: str, scope: str = ""
+) -> dict:
     citations = [_to_citation(chunk, i) for i, chunk in enumerate(chunks, start=1)]
     legal_refs = [citation["text"] for citation in citations]
     return {
@@ -111,6 +118,7 @@ def _build_result(chunks: list[dict], query: str, config: str) -> dict:
         "retrieval": {
             "config": config,
             "query": query,
+            "scope": scope,
             "count": len(citations),
             "candidates": [
                 {
@@ -134,7 +142,13 @@ def retrieve(
 ) -> dict:
     """同步检索接口（兼容旧测试与同步调用点）。"""
     query = build_query(doc_type, fields)
-    return retrieve_by_query(query, top_k=top_k, config=config, fallback_type=doc_type)
+    return retrieve_by_query(
+        query,
+        top_k=top_k,
+        config=config,
+        fallback_type=doc_type,
+        doc_type=doc_type,
+    )
 
 
 def retrieve_by_query(
@@ -142,19 +156,34 @@ def retrieve_by_query(
     top_k: int = TOP_K,
     config: str = "hybrid",
     fallback_type: str = "",
+    doc_type: str | None = None,
 ) -> dict:
-    """直接按自然语言查询检索，供评测脚本复用。"""
+    """直接按自然语言查询检索，供评测脚本复用。
+
+    `doc_type` 只用于收窄检索范围，不参与查询文本构造。
+    """
     original_query = query
     query = expand_query(query)
+    scope = doc_type if DOC_TYPE_SCOPE_ENABLED else None
     try:
         index = get_retrieval_index()
         if config == "dense":
-            chunks = dense_search(query, top_k=top_k, index=index)
+            chunks = dense_search(query, top_k=top_k, index=index, doc_type=scope)
         else:
-            chunks = hybrid_search(query, top_k=top_k, index=index)[:top_k]
+            chunks = hybrid_search(
+                query, top_k=top_k, index=index, doc_type=scope
+            )[:top_k]
+        if not chunks and scope:
+            # 映射表漏配时宁可放宽范围，也不要直接给用户一句兜底提示
+            print(f"⚠️ 「{scope}」范围内无命中，回退全库检索")
+            scope = None
+            if config == "dense":
+                chunks = dense_search(query, top_k=top_k, index=index)
+            else:
+                chunks = hybrid_search(query, top_k=top_k, index=index)[:top_k]
         if not chunks:
             return _fallback_result(fallback_type or original_query, "no_hit")
-        result = _build_result(chunks, query, config)
+        result = _build_result(chunks, query, config, scope=scope or "")
         if query != original_query:
             result["retrieval"]["original_query"] = original_query
         return result
@@ -179,7 +208,7 @@ async def aretrieve(
 
     fetch_k = max(top_k * 2, top_k) if enabled else top_k
     result = await asyncio.to_thread(
-        retrieve_by_query, query, fetch_k, config, doc_type
+        retrieve_by_query, query, fetch_k, config, doc_type, doc_type
     )
 
     citations = result.get("citations") or []
@@ -188,7 +217,8 @@ async def aretrieve(
             from .rerank import llm_rerank
 
             reranked = await llm_rerank(query, citations, top_k=top_k)
-            result = _build_result(reranked, query, f"{config}+rerank")
+            scope = doc_type if DOC_TYPE_SCOPE_ENABLED else ""
+            result = _build_result(reranked, query, f"{config}+rerank", scope=scope)
         except Exception as exc:
             print(f"⚠️ 重排失败，保留 RRF 顺序: {exc}")
 

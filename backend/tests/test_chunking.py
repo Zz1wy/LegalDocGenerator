@@ -83,6 +83,21 @@ def test_known_article_metadata():
     assert target["effective_date"] == "2021-01-01"
 
 
+def test_chapter_boundary_article_keeps_its_own_chapter():
+    """章节标题出现前的最后一条属于旧章节，不能被记到下一章。"""
+    chunks = chunk_documents(load_legal_documents())
+    by_article = {
+        (chunk["short_name"], chunk["article"]): chunk
+        for chunk in chunks
+        if chunk["article"]
+    }
+    last_of_loan = by_article[("民法典", "第六百八十条")]
+    first_of_guarantee = by_article[("民法典", "第六百八十一条")]
+    assert "借款合同" in last_of_loan["chapter"]
+    assert "保证合同" not in last_of_loan["chapter"]
+    assert "保证合同" in first_of_guarantee["chapter"]
+
+
 def test_template_is_flagged_and_has_no_article():
     chunks = chunk_documents(load_legal_documents())
     templates = [chunk for chunk in chunks if chunk["is_template"]]

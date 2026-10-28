@@ -14,8 +14,10 @@ class FakeDoc:
 class FakeVectorStore:
     def __init__(self, results):
         self.results = results
+        self.last_filter = None
 
-    def similarity_search_with_score(self, query, k=20):
+    def similarity_search_with_score(self, query, k=20, filter=None):
+        self.last_filter = filter
         return self.results[:k]
 
 

@@ -24,6 +24,11 @@ from .knowledge_base import (
     OLLAMA_HOST,
     build_knowledge_base,
 )
+from .scope import (
+    chunk_in_scope,
+    chroma_where,
+    scope_for,
+)
 
 try:
     import jieba
@@ -119,6 +124,7 @@ class RetrievalIndex:
     tokenized: list[list[str]]
     vectorstore: object
     chunk_by_id: dict[str, dict] = field(default_factory=dict)
+    _scope_masks: dict[str, list[bool] | None] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
         if not self.chunk_by_id:
@@ -128,36 +134,74 @@ class RetrievalIndex:
     def size(self) -> int:
         return len(self.chunks)
 
-    def dense_search(self, query: str, k: int = 20) -> list[dict]:
-        docs = self.vectorstore.similarity_search_with_score(query, k=k)
-        results = []
-        for rank, (document, distance) in enumerate(docs, start=1):
-            chunk_id = document.metadata.get("chunk_id")
-            chunk = self.chunk_by_id.get(chunk_id)
-            if chunk is None:
-                continue
-            results.append({
-                **chunk,
-                "dense_score": float(distance),
-                "dense_rank": rank,
-            })
+    def scope_mask(self, doc_type: str | None) -> list[bool] | None:
+        """按文书类型缓存的 chunk 允许掩码；None 表示不过滤。"""
+        key = (doc_type or "").strip()
+        if key not in self._scope_masks:
+            scopes = scope_for(key)
+            self._scope_masks[key] = (
+                None
+                if scopes is None
+                else [chunk_in_scope(chunk, scopes) for chunk in self.chunks]
+            )
+        return self._scope_masks[key]
+
+    def dense_search(
+        self, query: str, k: int = 20, doc_type: str | None = None
+    ) -> list[dict]:
+        scopes = scope_for(doc_type)
+        where = chroma_where(scopes)
+        # 法名/分编可以交给 Chroma 预过滤，但章节要拿到结果后再筛，
+        # 因此多取一些候选；不够 k 条时再逐次扩大。
+        fetch_k = k
+        if scopes:
+            fetch_k = min(max(k * 4, 50), self.size)
+
+        results: list[dict] = []
+        for _ in range(3):
+            docs = self.vectorstore.similarity_search_with_score(
+                query, k=fetch_k, filter=where
+            )
+            results = []
+            for document, distance in docs:
+                chunk_id = document.metadata.get("chunk_id")
+                chunk = self.chunk_by_id.get(chunk_id)
+                if chunk is None or not chunk_in_scope(chunk, scopes):
+                    continue
+                results.append({
+                    **chunk,
+                    "dense_score": float(distance),
+                    "dense_rank": len(results) + 1,
+                })
+                if len(results) >= k:
+                    break
+            if len(results) >= k or not scopes or fetch_k >= self.size:
+                break
+            fetch_k = min(fetch_k * 4, self.size)
         return results
 
-    def bm25_search(self, query: str, k: int = 20) -> list[dict]:
+    def bm25_search(
+        self, query: str, k: int = 20, doc_type: str | None = None
+    ) -> list[dict]:
         tokens = tokenize(query)
         if not tokens:
             return []
         scores = self.bm25.get_scores(tokens)
+        mask = self.scope_mask(doc_type)
         order = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
         results = []
-        for rank, index in enumerate(order[:k], start=1):
+        for index in order:
             if scores[index] <= 0:
+                break
+            if mask is not None and not mask[index]:
                 continue
             results.append({
                 **self.chunks[index],
                 "bm25_score": float(scores[index]),
-                "bm25_rank": rank,
+                "bm25_rank": len(results) + 1,
             })
+            if len(results) >= k:
+                break
         return results
 
 

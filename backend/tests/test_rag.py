@@ -169,6 +169,23 @@ class TestRetrieval:
         # 在线检索默认走混合检索，而不是纯向量
         assert result["retrieval"]["config"] == "hybrid"
 
+    def test_retrieve_respects_doc_type_scope(self):
+        """✅ 在线检索按文书类型收窄范围，不召回无关法律"""
+        from rag.retriever import retrieve
+
+        labor = retrieve("劳动合同", {
+            "party_a": "科技公司", "salary": "30000", "term": "三年"
+        })
+        assert labor["citations"]
+        assert {c["short_name"] for c in labor["citations"]} <= {"劳动合同法", "劳动法"}
+
+        sale = retrieve("房屋买卖合同", {
+            "seller": "卖方", "buyer": "买方", "house_price": "500万"
+        })
+        assert sale["citations"]
+        assert all(c["short_name"] == "民法典" for c in sale["citations"])
+        assert {c["book"] for c in sale["citations"]} <= {"合同编", "物权编"}
+
     def test_build_query(self):
         """✅ 查询文本构建"""
         from rag.retriever import build_query

@@ -22,8 +22,9 @@
     evaluation/reports/generation_eval_<timestamp>.md
 
 人工复核（可选）：
-    evaluation/generation_review.json，按样本 id 记录 citation_support 与 notes；
-    脚本会自动合并到报告里。citation_support 取值：
+    evaluation/generation_review.json，按样本 id 记录 content_hash、citation_support
+    与 notes；脚本只采纳 content_hash 与本次生成文本一致的记录，避免重跑后
+    沿用旧结论。citation_support 取值：
     supported / partial / unsupported / hallucinated / no_citation。
 
 边界：
@@ -36,6 +37,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import copy
+import hashlib
 import json
 import os
 import re
@@ -114,6 +116,33 @@ def load_review(path: Path) -> dict:
     if not isinstance(data, dict):
         raise SystemExit("人工复核文件必须是 {样本 id: {citation_support, notes}} 对象")
     return data
+
+
+def content_hash(content: str) -> str:
+    """生成文本的指纹：人工复核只对当时那份文本有效。"""
+    return hashlib.sha256((content or "").encode("utf-8")).hexdigest()
+
+
+def filter_review(results: list[dict], review: dict) -> tuple[dict, int]:
+    """只保留与本次生成文本一致的人工复核记录，返回（有效记录, 失效条数）。
+
+    模型温度不为 0，重跑后文本会变；沿用旧的 supported/partial 判断会让人
+    误以为新文本也经过复核，所以用 content_hash 绑定复核对象。
+    """
+    by_id = {item["id"]: item for item in results}
+    details = {}
+    stale = 0
+    for sample_id, record in review.items():
+        if not isinstance(record, dict):
+            continue
+        item = by_id.get(sample_id)
+        if item is None:
+            continue
+        if record.get("content_hash") != content_hash(item.get("content", "")):
+            stale += 1
+            continue
+        details[sample_id] = record
+    return details, stale
 
 
 def _key_text(key: tuple[str, int, str]) -> str:
@@ -478,9 +507,14 @@ def render_markdown(payload: dict) -> str:
             "- 自动指标不判断法条是否适用于具体案情，也不判断模型是否曲解条文；这部分靠人工复核。",
             "- 生成温度不为 0，结果会波动；本报告是一次抽检，不是线上准确率承诺。",
             "- 完整生成文本见同名 JSON 报告。",
-            "",
         ]
     )
+    if payload.get("review_stale"):
+        lines.append(
+            f"- 有 {payload['review_stale']} 条人工复核记录因生成文本已变化被忽略"
+            "（复核只对当时的文本有效）。"
+        )
+    lines.append("")
     return "\n".join(lines)
 
 
@@ -568,13 +602,15 @@ def write_report(payload: dict, prefix: str = "generation_eval") -> tuple[Path, 
 
 
 def _build_payload(results: list[dict], config: dict, review_path: Path) -> dict:
-    review = load_review(review_path)
-    review_details = {key: value for key, value in review.items() if isinstance(value, dict)}
+    review_details, stale_review = filter_review(
+        results, load_review(review_path)
+    )
     return {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "config": config,
         "aggregate": _aggregate(results),
         "review": _review_summary(results, review_details),
+        "review_stale": stale_review,
         "review_details": review_details,
         "samples": results,
     }
