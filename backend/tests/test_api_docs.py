@@ -141,6 +141,8 @@ class TestDocumentGeneration:
         # 前端要根据 citations 展示参考法条；RAG 关闭时也必须是空列表
         assert response.json()["citations"] == []
         assert "citation_check" in response.json()
+        # 语义判卷默认关闭，不额外调用 LLM
+        assert response.json()["citation_semantics"] == {"enabled": False}
         # 确认真的执行了 INSERT（而不是只把 id 编出来）
         sql = mock_cursor.execute.call_args[0][0]
         assert "INSERT INTO generated_records" in sql
@@ -173,6 +175,8 @@ class TestDocumentGeneration:
         # done 事件必须带引用字段，前端无需再发一次请求
         assert '"citations": []' in body
         assert '"citation_check"' in body
+        assert '"citation_semantics"' in body
+        assert '"enabled": false' in body
         sql = mock_cursor.execute.call_args[0][0]
         assert "INSERT INTO generated_records" in sql
 

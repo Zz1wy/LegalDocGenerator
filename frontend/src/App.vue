@@ -261,7 +261,40 @@
                         >
                           {{ invalidCitations.length }} 处引用未在本地语料中找到
                         </el-tag>
+                        <el-tag
+                          v-if="semanticSummary"
+                          :type="semanticSummary.counts.unsupported || semanticSummary.counts.partial ? 'danger' : 'success'"
+                          size="small"
+                          style="margin-left: 8px;"
+                        >
+                          语义判卷：{{ semanticSummary.counts.supported }}/{{ semanticSummary.scored }} 条支持
+                        </el-tag>
                       </template>
+
+                      <el-alert
+                        v-if="semanticError"
+                        type="info"
+                        :closable="false"
+                        style="margin-bottom: 12px;"
+                        :title="`引用语义判卷未完成：${semanticError}`"
+                      />
+                      <el-alert
+                        v-else-if="semanticSummary"
+                        :type="semanticSummary.counts.unsupported || semanticSummary.counts.partial ? 'warning' : 'success'"
+                        :closable="false"
+                        style="margin-bottom: 12px;"
+                        :title="semanticSummary.counts.unsupported || semanticSummary.counts.partial
+                          ? `有 ${semanticSummary.counts.unsupported + semanticSummary.counts.partial} 处引用可能不支撑正文表述，请人工复核`
+                          : '已检查的引用均可支撑其所在表述'"
+                      >
+                        <div style="font-size: 12px;">
+                          判卷模型给出的结论只作辅助，可能误判；「支持」也不等于法律意见。
+                          <span v-if="semanticSummary.errors?.length">
+                            {{ semanticSummary.errors.length }} 处因调用失败未能判断。
+                          </span>
+                        </div>
+                      </el-alert>
+
                       <el-alert
                         v-if="invalidCitations.length"
                         type="warning"
@@ -282,6 +315,22 @@
                           <span>
                             [S{{ index + 1 }}] 《{{ citation.short_name || citation.law }}》{{ citation.article }}
                             <span v-if="citation.book" class="citation-book">（{{ citation.book }}）</span>
+                            <el-tag
+                              v-if="semanticForCitation(citation)"
+                              :type="semanticVerdictTagType[semanticForCitation(citation).verdict] || 'info'"
+                              size="small"
+                              style="margin-left: 8px;"
+                            >
+                              {{ semanticVerdictLabel[semanticForCitation(citation).verdict] || semanticForCitation(citation).verdict }}
+                            </el-tag>
+                            <el-tag
+                              v-if="semanticForCitation(citation)?.scope_mismatch"
+                              type="danger"
+                              size="small"
+                              style="margin-left: 6px;"
+                            >
+                              章节范围不符
+                            </el-tag>
                           </span>
                           <a
                             v-if="citation.source_url"
@@ -293,6 +342,12 @@
                         <div class="citation-text">{{ citation.text }}</div>
                         <div v-if="citation.effective_date" class="citation-meta">
                           施行日期：{{ citation.effective_date }}
+                        </div>
+                        <div v-if="semanticForCitation(citation)?.reason" class="citation-semantic">
+                          <div v-if="semanticForCitation(citation).claim">
+                            判卷理解的主张：{{ semanticForCitation(citation).claim }}
+                          </div>
+                          <div>判卷理由：{{ semanticForCitation(citation).reason }}</div>
                         </div>
                       </div>
                       <p class="citation-disclaimer">
@@ -528,6 +583,39 @@ const citations = ref([])
 const citationCheck = ref(null)
 const invalidCitations = computed(() => citationCheck.value?.invalid || [])
 
+// 可选的「引用语义恰当性」判卷（后端默认关闭；开启后才会有结果）
+const citationSemantics = ref(null)
+const semanticUnits = computed(() => citationSemantics.value?.units || [])
+const semanticSummary = computed(() => citationSemantics.value?.summary || null)
+const semanticError = computed(() => citationSemantics.value?.error || '')
+const semanticVerdictLabel = {
+  supported: '条文支持',
+  partial: '部分支持',
+  unsupported: '不支持',
+  unverifiable: '无法判断'
+}
+const semanticVerdictTagType = {
+  supported: 'success',
+  partial: 'warning',
+  unsupported: 'danger',
+  unverifiable: 'info'
+}
+
+// 判卷结果按「法名 + 条号」对回检索到的法条；对不上时退回只比条号
+function semanticForCitation(citation) {
+  const units = semanticUnits.value
+  if (!units.length) return null
+  const law = citation.short_name || citation.law || ''
+  const article = citation.article || ''
+  return (
+    units.find((unit) => {
+      if (unit.article !== article) return false
+      if (!law || !unit.law) return true
+      return law.includes(unit.law) || unit.law.includes(law)
+    }) || null
+  )
+}
+
 // 当前生成结果对应的历史记录 id（游客 / 保存失败时为 null）
 const currentRecordId = ref(null)
 
@@ -653,6 +741,7 @@ async function generateDoc() {
   generatedContent.value = ''  // 清空旧内容，准备流式追加
   citations.value = []
   citationCheck.value = null
+  citationSemantics.value = null
   currentRecordId.value = null
   isEditingGenerated.value = false
   editingContent.value = ''
@@ -717,6 +806,7 @@ async function generateDoc() {
               currentRecordId.value = event.record_id || null
               citations.value = Array.isArray(event.citations) ? event.citations : []
               citationCheck.value = event.citation_check || null
+              citationSemantics.value = event.citation_semantics || null
               // 生成完成，刷新历史记录
               await loadHistory()
             } else if (event.type === 'error') {
@@ -1134,6 +1224,17 @@ function formatFields(inputFields) {
   margin-top: 4px;
   font-size: 12px;
   color: #94a3b8;
+}
+
+.citation-semantic {
+  margin-top: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #475569;
+  background: #f1f5f9;
+  border-left: 3px solid #94a3b8;
+  border-radius: 4px;
 }
 
 .citation-disclaimer {

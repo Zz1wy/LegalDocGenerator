@@ -18,7 +18,7 @@ from passlib.context import CryptContext
 import hashlib
 
 # LLM Provider：Ollama / OpenAI 兼容 API 可切换
-from llm import get_llm_client, get_model_name
+from llm import get_judge_client, get_llm_client, get_model_name
 
 # RAG 模块导入（带优雅降级：如果没有安装相关依赖，RAG 功能自动禁用）
 try:
@@ -28,6 +28,7 @@ try:
         retrieve as rag_retrieve,
     )
     from rag.citations import verify_citations
+    from rag.semantic import check_citations as semantic_check_citations
     RAG_AVAILABLE = True
 except ImportError as e:
     RAG_AVAILABLE = False
@@ -605,6 +606,55 @@ def build_citation_payload(retrieval: dict, content: str) -> dict:
     return payload
 
 
+def _semantic_check_enabled() -> bool:
+    return os.getenv("CITATION_SEMANTIC_CHECK", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+async def build_semantic_payload(
+    retrieval: dict,
+    content: str,
+    doc_type: str,
+    fields: dict,
+) -> dict:
+    """可选的引用语义判卷：逐条判断条文是否支持正文里的那句话。
+
+    默认关闭（CITATION_SEMANTIC_CHECK=false）：每处引用都会多一次 LLM 调用，
+    本地 7B 模型会明显拉长生成后的等待。判卷失败只返回 error，不影响文书生成本身。
+    """
+    if not _semantic_check_enabled():
+        return {"enabled": False}
+    if not RAG_AVAILABLE:
+        return {"enabled": True, "error": "RAG 模块不可用", "units": [], "summary": None}
+
+    try:
+        from rag.indexer import get_retrieval_index
+
+        try:
+            concurrency = int(os.getenv("SEMANTIC_JUDGE_CONCURRENCY", "2"))
+        except ValueError:
+            concurrency = 2
+        chunks = get_retrieval_index().chunks
+        return await semantic_check_citations(
+            content,
+            retrieval.get("citations") or [],
+            doc_type,
+            fields,
+            get_judge_client(),
+            chunks=chunks,
+            concurrency=max(1, min(4, concurrency)),
+        )
+    except Exception as e:
+        print(f"⚠️ 引用语义判卷失败: {e}")
+        return {
+            "enabled": True,
+            "error": "引用语义判卷不可用",
+            "units": [],
+            "summary": None,
+        }
+
+
 async def generate_with_ai_detailed(doc_type: str, fields: dict) -> tuple[str, dict]:
     """生成文书并返回 (内容, 检索结果)。"""
     prompt, retrieval = await build_prompt_with_rag_async(doc_type, fields)
@@ -744,11 +794,15 @@ async def generate_document(
                 request.doc_type, request.fields, content, current_user["id"],
             )
 
+        payload = build_citation_payload(retrieval, content)
+        payload["citation_semantics"] = await build_semantic_payload(
+            retrieval, content, request.doc_type, request.fields
+        )
         return {
             "success": True,
             "content": content,
             "record_id": record_id,
-            **build_citation_payload(retrieval, content),
+            **payload,
         }
     except Exception as e:
         # 详细异常只写服务端日志，不把内部地址/堆栈返回给客户端。
@@ -801,10 +855,14 @@ async def generate_document_stream(
                 )
 
             # 推送完成事件。带上 record_id 与引用，前端据此展示「参考法条」。
+            payload = build_citation_payload(retrieval, full_content)
+            payload["citation_semantics"] = await build_semantic_payload(
+                retrieval, full_content, request.doc_type, request.fields
+            )
             done_event = {
                 "type": "done",
                 "record_id": record_id,
-                **build_citation_payload(retrieval, full_content),
+                **payload,
             }
             yield f"data: {json.dumps(done_event, ensure_ascii=False)}\n\n"
         except Exception as e:

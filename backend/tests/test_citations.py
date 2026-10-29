@@ -4,6 +4,7 @@ from rag.citations import (
     build_corpus_lookup,
     citation_key,
     extract_citations,
+    find_citations,
     format_source_block,
     normalize_article,
     normalize_law_name,
@@ -81,6 +82,18 @@ def test_extract_citations_expands_and_separator_but_stops_at_plain_text():
     text = "《民法典》第五百八十五条和第五百八十六条，当事人可以约定违约金。"
     citations = extract_citations(text)
     assert [item["article"] for item in citations] == ["第五百八十五条", "第五百八十六条"]
+
+
+def test_find_citations_keeps_positions_and_duplicates():
+    text = "依据《民法典》第六百八十条，并参照《民法典》第六百八十条。"
+    found = find_citations(text)
+    assert len(found) == 2
+    for item in found:
+        assert text[item["start"]:item["end"]] == "《民法典》第六百八十条"
+    # 枚举条号的位置只覆盖「第Y条」，便于定位引用所在句子
+    enumerated = find_citations("《民法典》第五百八十五条和第五百八十六条。")
+    assert enumerated[1]["raw"] == "和第五百八十六条"
+    assert enumerated[1]["start"] == enumerated[1]["end"] - len("第五百八十六条")
 
 
 def test_extract_citations_ignores_plain_text_and_bad_names():

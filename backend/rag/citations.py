@@ -65,6 +65,51 @@ def citation_key(law: str, article: str) -> tuple[str, int, str]:
     return normalize_law_name(law), number, suffix
 
 
+def find_citations(text: str) -> list[dict]:
+    """抽取所有显式法条引用，保留原文位置与重复出现。
+
+    与 ``extract_citations`` 的区别：这里不去重，并额外返回 ``start`` /
+    ``end``（引用在原文中的字符区间），供语义校验定位「引用所在的句子」。
+    """
+    text = text or ""
+    found: list[dict] = []
+
+    def add(law: str, article: str, raw: str, start: int, end: int) -> None:
+        number, suffix = normalize_article(article)
+        found.append({
+            "raw": raw,
+            "law": law,
+            "article": article,
+            "article_num": number,
+            "suffix": suffix,
+            "start": start,
+            "end": end,
+        })
+
+    for match in _CITATION_RE.finditer(text):
+        law = normalize_law_name(match.group(1))
+        add(law, match.group(2), match.group(0), match.start(), match.end())
+
+        # 继续吃掉紧跟其后的「、第Y条」，直到遇到另一部法律或普通正文
+        position = match.end()
+        while True:
+            extra = _ARTICLE_LIST_RE.match(text, position)
+            if extra is None:
+                break
+            # 位置只覆盖「第Y条」本身，不包含前面的顿号/逗号，
+            # 否则句子定位会把分隔符当成引用的一部分。
+            add(
+                law,
+                extra.group(1),
+                extra.group(0).strip(),
+                extra.start(1),
+                extra.end(1),
+            )
+            position = extra.end()
+
+    return found
+
+
 def extract_citations(text: str) -> list[dict]:
     """从生成文本中抽取所有显式法条引用，去重并保持出现顺序。
 
@@ -73,37 +118,20 @@ def extract_citations(text: str) -> list[dict]:
     会被抽成三条，均归入《民事诉讼法》。法律文书里这种写法很常见，
     只抓第一条会让「引用可追溯率」被低估。
     """
-    text = text or ""
     seen: set[tuple[str, int, str]] = set()
     found: list[dict] = []
-
-    def add(law: str, article: str, raw: str) -> None:
-        key = citation_key(law, article)
+    for item in find_citations(text):
+        key = citation_key(item["law"], item["article"])
         if key in seen:
-            return
+            continue
         seen.add(key)
-        number, suffix = normalize_article(article)
         found.append({
-            "raw": raw,
-            "law": law,
-            "article": article,
-            "article_num": number,
-            "suffix": suffix,
+            "raw": item["raw"],
+            "law": item["law"],
+            "article": item["article"],
+            "article_num": item["article_num"],
+            "suffix": item["suffix"],
         })
-
-    for match in _CITATION_RE.finditer(text):
-        law = normalize_law_name(match.group(1))
-        add(law, match.group(2), match.group(0))
-
-        # 继续吃掉紧跟其后的「、第Y条」，直到遇到另一部法律或普通正文
-        position = match.end()
-        while True:
-            extra = _ARTICLE_LIST_RE.match(text, position)
-            if extra is None:
-                break
-            add(law, extra.group(1), extra.group(0).strip())
-            position = extra.end()
-
     return found
 
 

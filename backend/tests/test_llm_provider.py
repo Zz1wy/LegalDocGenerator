@@ -5,7 +5,14 @@ import json
 import httpx
 import pytest
 
-from llm import LLMError, LLMResult, get_llm_client, get_model_name, reset_llm_client
+from llm import (
+    LLMError,
+    LLMResult,
+    get_judge_client,
+    get_llm_client,
+    get_model_name,
+    reset_llm_client,
+)
 from llm.ollama import OllamaClient
 from llm.openai_compat import OpenAICompatClient
 from rag.rerank import _parse_ranking, llm_rerank
@@ -18,6 +25,8 @@ def clean_llm_env(monkeypatch):
     for name in (
         "LLM_PROVIDER", "LLM_MODEL", "OLLAMA_MODEL", "LLM_BASE_URL",
         "LLM_API_KEY", "LLM_TIMEOUT", "OLLAMA_HOST",
+        "JUDGE_PROVIDER", "JUDGE_MODEL", "JUDGE_BASE_URL",
+        "JUDGE_API_KEY", "JUDGE_TIMEOUT",
     ):
         monkeypatch.delenv(name, raising=False)
     reset_llm_client()
@@ -68,6 +77,35 @@ def test_factory_requires_api_key(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "openai")
     with pytest.raises(LLMError, match="LLM_API_KEY"):
         get_llm_client()
+
+
+def test_judge_factory_defaults_to_generation_config(monkeypatch):
+    monkeypatch.setenv("OLLAMA_HOST", "http://localhost:11434")
+    monkeypatch.setenv("LLM_MODEL", "qwen2.5:7b")
+    client = get_judge_client()
+    assert isinstance(client, OllamaClient)
+    assert client.model == "qwen2.5:7b"
+    assert client.base_url == "http://localhost:11434"
+
+
+def test_judge_factory_allows_separate_model(monkeypatch):
+    monkeypatch.setenv("OLLAMA_HOST", "http://localhost:11434")
+    monkeypatch.setenv("LLM_MODEL", "qwen2.5:7b")
+    monkeypatch.setenv("JUDGE_MODEL", "qwen2.5:14b")
+    client = get_judge_client()
+    assert client.model == "qwen2.5:14b"
+
+
+def test_judge_factory_can_use_cloud_judge(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("JUDGE_PROVIDER", "deepseek")
+    monkeypatch.setenv("JUDGE_MODEL", "deepseek-chat")
+    monkeypatch.setenv("JUDGE_BASE_URL", "https://api.deepseek.com/v1")
+    monkeypatch.setenv("JUDGE_API_KEY", "sk-judge")
+    client = get_judge_client()
+    assert isinstance(client, OpenAICompatClient)
+    assert client.model == "deepseek-chat"
+    assert client.base_url == "https://api.deepseek.com/v1"
 
 
 def test_ollama_generate(monkeypatch):
