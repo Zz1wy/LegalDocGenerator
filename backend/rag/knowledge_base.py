@@ -51,7 +51,9 @@ COLLECTION_NAME = "legal_knowledge"
 INDEX_VERSION = 3
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
+# 默认与 .env.example / docker-compose / README 保持一致；换模型会改变索引指纹，
+# 下次启动自动重建，不同模型的向量不可混用。
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "bge-m3")
 
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 80
